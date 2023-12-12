@@ -3,7 +3,7 @@
 Python package for communicating with [CheckWatt](https://checkwatt.se/) [EnergyInBalance](https://energyinbalance.se/) eventually targeted for [Home Assistant](https://home-assistant.io)
 
 ## Warning
-This library is provided as-is, is not supported or sanctioned by ChekWatt.
+This library is provided as-is, is not supported or sanctioned by CheckWatt.
 
 ## Status
 The library is **expermental** and does nothing but to pull some basic info from [EnergyInBalance](https://energyinbalance.se/)
