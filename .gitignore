@@ -1,0 +1,10 @@
+/*
+/*/
+!.gitignore
+!README.md
+!LICENSE
+!setup.py
+!setup.cfg
+!main.py
+!pycheckwatt/
+**/__pycache__/
