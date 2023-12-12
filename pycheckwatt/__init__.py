@@ -1,5 +1,5 @@
 from __future__ import annotations
-from aiohttp import ClientSession, ClientError, ContentTypeError
+from aiohttp import ClientSession, ClientError
 import logging
 import base64
 import re
@@ -9,6 +9,8 @@ _LOGGER = logging.getLogger(__name__)
 
 class CheckwattManager:
     def __init__(self, username, password):
+        if username is None or password is None:
+            raise ValueError("Username and password must be provided.")
         self.session = None
         self.base_url = "https://services.cnet.se/checkwattapi/v2"
         self.username = username
@@ -71,11 +73,7 @@ class CheckwattManager:
                 return True
 
         except ClientError as e:
-            _LOGGER.error(f"An error occurred during the request: {e}")
-            return False
-
-        except ContentTypeError as e:
-            _LOGGER.error(f"Error parsing JSON: {e}")
+            _LOGGER.error(f"An error occurred during login: {e}")
             return False
 
     async def get_customer_details(self):
@@ -113,13 +111,8 @@ class CheckwattManager:
                 return self.customer_details['Id']
 
         except ClientError as e:
-            _LOGGER.error(f"An error occurred during the request: {e}")
+            _LOGGER.error(f"An error occurred during the CustomerDetail request: {e}")
             return None
-
-        except ContentTypeError as e:
-            _LOGGER.error(f"Error parsing JSON: {e}")
-            return None
-
 
     @property
     def inverter_make_and_model(self):
@@ -135,7 +128,7 @@ class CheckwattManager:
             resp += f" {self.battery_registration['BatteryModel']}"
             resp += f" ({self.battery_registration['BatteryPowerKW']}kW, {self.battery_registration['BatteryCapacityKWh']}kWh)"
             return resp
-    
+
     @property
     def exectricity_provider(self):
         if "ElectricityCompany" in self.battery_registration and "Dso" in self.battery_registration:
