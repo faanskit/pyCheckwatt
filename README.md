@@ -14,7 +14,7 @@ The library is **expermental** and does nothing but to pull some basic info from
 Create a `.env` file that looks like this and contain your credentials to [EnergyInBalance](https://energyinbalance.se/).
 ```
 CHECKWATT_USERNAME=<username>
-CHECKWATT_PASSWORD=<passwored>
+CHECKWATT_PASSWORD=<password>
 ```
 
 Run a simple test:
