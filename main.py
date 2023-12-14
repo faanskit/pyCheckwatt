@@ -13,11 +13,11 @@ async def main():
         try:
             # Login to EnergyInBalance
             if await check_watt_instance.login():
-                
+
                 # Fetch customer detail
                 customer_id  = await check_watt_instance.get_customer_details()
-                
-                # Do a sample 
+
+                # Do a sample
                 print("Customer Details\n================")
                 print(check_watt_instance.registred_owner)
 
@@ -35,4 +35,6 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.get_event_loop().run_until_complete(main())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(main())
