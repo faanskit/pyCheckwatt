@@ -1,31 +1,45 @@
 from __future__ import annotations
-from aiohttp import ClientSession, ClientError
-import logging
+from datetime import datetime, timedelta
+
 import base64
-import re
 import json
+import logging
+import re
+
+from aiohttp import ClientError, ClientSession
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class CheckwattManager:
+    """Docstring."""
+
     def __init__(self, username, password):
+        """Docstring."""
         if username is None or password is None:
             raise ValueError("Username and password must be provided.")
         self.session = None
         self.base_url = "https://services.cnet.se/checkwattapi/v2"
         self.username = username
         self.password = password
+        self.revenue = None
 
     async def __aenter__(self):
+        """Docstring."""
         self.session = ClientSession()
         return self
 
     async def __aexit__(self, exc_type, exc_value, traceback):
+        """Docstring."""
         await self.session.close()
 
     def _extract_content_and_logbook(self, input_string):
+        """Docstring."""
+
         # Define the pattern to match the content between the tags
-        pattern = re.compile(r'#BEGIN_BATTERY_REGISTRATION(.*?)#END_BATTERY_REGISTRATION', re.DOTALL)
+        pattern = re.compile(
+            r"#BEGIN_BATTERY_REGISTRATION(.*?)#END_BATTERY_REGISTRATION", re.DOTALL
+        )
 
         # Find all matches in the input string
         matches = re.findall(pattern, input_string)
@@ -37,17 +51,27 @@ class CheckwattManager:
             battery_registration = json.loads(extracted_content)
 
         # Extract logbook entries
-        logbook_entries = input_string.split('\n')
+        logbook_entries = input_string.split("\n")
 
         # Filter out entries containing #BEGIN_BATTERY_REGISTRATION and #END_BATTERY_REGISTRATION
-        logbook_entries = [entry.strip() for entry in logbook_entries if not ('#BEGIN_BATTERY_REGISTRATION' in entry or '#END_BATTERY_REGISTRATION' in entry)]
+        logbook_entries = [
+            entry.strip()
+            for entry in logbook_entries
+            if not (
+                "#BEGIN_BATTERY_REGISTRATION" in entry
+                or "#END_BATTERY_REGISTRATION" in entry
+            )
+        ]
 
         return battery_registration, logbook_entries
 
     async def login(self):
+        """Docstring."""
         try:
             credentials = f"{self.username}:{self.password}"
-            encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode("utf-8")
+            encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
+                "utf-8"
+            )
             endpoint = "/user/LoginEiB?audience=eib"
 
             # Define headers with the encoded credentials
@@ -56,17 +80,19 @@ class CheckwattManager:
                 "accept-language": "sv-SE,sv;q=0.9,en-SE;q=0.8,en;q=0.7,en-US;q=0.6",
                 "authorization": f"Basic {encoded_credentials}",
                 "content-type": "application/json",
-                "sec-ch-ua": "\"Chromium\";v=\"112\", \"Google Chrome\";v=\"112\", \"Not:A-Brand\";v=\"99\"",
+                "sec-ch-ua": '"Chromium";v="112", "Google Chrome";v="112", "Not:A-Brand";v="99"',
                 "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": "\"Windows\"",
+                "sec-ch-ua-platform": '"Windows"',
                 "sec-fetch-dest": "empty",
                 "sec-fetch-mode": "cors",
                 "sec-fetch-site": "cross-site",
                 "wslog-os": "",
-                "wslog-platform": "controlpanel"
+                "wslog-platform": "controlpanel",
             }
 
-            async with self.session.get(self.base_url + endpoint, headers=headers) as response:
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
                 data = await response.json()
                 self.jwt_token = data.get("JwtToken")
                 self.refresh_token = data.get("RefreshToken")
@@ -86,29 +112,67 @@ class CheckwattManager:
                 "accept-language": "sv-SE,sv;q=0.9,en-SE;q=0.8,en;q=0.7,en-US;q=0.6",
                 "authorization": f"Bearer {self.jwt_token}",
                 "content-type": "application/json",
-                "sec-ch-ua": "\"Chromium\";v=\"112\", \"Google Chrome\";v=\"112\", \"Not:A-Brand\";v=\"99\"",
+                "sec-ch-ua": '"Chromium";v="112", "Google Chrome";v="112", "Not:A-Brand";v="99"',
                 "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": "\"Windows\"",
+                "sec-ch-ua-platform": '"Windows"',
                 "sec-fetch-dest": "empty",
                 "sec-fetch-mode": "cors",
                 "sec-fetch-site": "cross-site",
                 "wslog-os": "",
-                "wslog-platform": "controlpanel"
+                "wslog-platform": "controlpanel",
             }
 
-            async with self.session.get(self.base_url + endpoint, headers=headers) as response:
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
                 response.raise_for_status()
                 self.customer_details = await response.json()
-
 
                 meters = self.customer_details.get("Meter", [])
                 if meters:
                     first_meter = meters[0]
                     logbook = first_meter.get("Logbook")
                     if logbook:
-                        self.battery_registration, self.logbook_entries = self._extract_content_and_logbook(logbook)
+                        (
+                            self.battery_registration,
+                            self.logbook_entries,
+                        ) = self._extract_content_and_logbook(logbook)
 
-                return self.customer_details['Id']
+                return self.customer_details["Id"]
+
+        except ClientError as e:
+            _LOGGER.error(f"An error occurred during the CustomerDetail request: {e}")
+            return None
+
+    async def get_fcrd_revenue(self):
+        try:
+            fromDate = datetime.now().strftime("%Y-%m-%d")
+            end_date = datetime.now() + timedelta(days=2)
+            toDate = end_date.strftime("%Y-%m-%d")
+
+            endpoint = f"/ems/fcrd/revenue?fromDate={fromDate}&toDate={toDate}"
+
+            # Define headers with the JwtToken
+            headers = {
+                "accept": "application/json, text/plain, */*",
+                "accept-language": "sv-SE,sv;q=0.9,en-SE;q=0.8,en;q=0.7,en-US;q=0.6",
+                "authorization": f"Bearer {self.jwt_token}",
+                "content-type": "application/json",
+                "sec-ch-ua": '"Chromium";v="112", "Google Chrome";v="112", "Not:A-Brand";v="99"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "cross-site",
+                "wslog-os": "",
+                "wslog-platform": "controlpanel",
+            }
+
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                self.revenue = await response.json()
 
         except ClientError as e:
             _LOGGER.error(f"An error occurred during the CustomerDetail request: {e}")
@@ -116,14 +180,20 @@ class CheckwattManager:
 
     @property
     def inverter_make_and_model(self):
-        if "Inverter" in self.battery_registration and "InverterModel" in self.battery_registration:
+        if (
+            "Inverter" in self.battery_registration
+            and "InverterModel" in self.battery_registration
+        ):
             resp = f"{self.battery_registration['Inverter']}"
             resp += f" {self.battery_registration['InverterModel']}"
             return resp
 
     @property
     def battery_make_and_model(self):
-        if "BatteryModel" in self.battery_registration and "BatterySystem" in self.battery_registration:
+        if (
+            "BatteryModel" in self.battery_registration
+            and "BatterySystem" in self.battery_registration
+        ):
             resp = f"{self.battery_registration['BatterySystem']}"
             resp += f" {self.battery_registration['BatteryModel']}"
             resp += f" ({self.battery_registration['BatteryPowerKW']}kW, {self.battery_registration['BatteryCapacityKWh']}kWh)"
@@ -131,7 +201,10 @@ class CheckwattManager:
 
     @property
     def exectricity_provider(self):
-        if "ElectricityCompany" in self.battery_registration and "Dso" in self.battery_registration:
+        if (
+            "ElectricityCompany" in self.battery_registration
+            and "Dso" in self.battery_registration
+        ):
             resp = f"{self.battery_registration['ElectricityCompany']}"
             resp += f" via {self.battery_registration['Dso']}"
             resp += f" ({self.battery_registration['GridAreaId']} {self.battery_registration['Kommun']})"
@@ -146,3 +219,12 @@ class CheckwattManager:
             resp += f" {self.customer_details['ZipCode']}"
             resp += f" {self.customer_details['City']})"
             return resp
+
+    @property
+    def today_revenue(self):
+        """Whatever."""
+        if self.revenue is not None:
+            if len(self.revenue) != 0:
+                if "Revenue" in self.revenue[0]:
+                    return self.revenue[0]["Revenue"]
+        return None
