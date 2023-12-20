@@ -1,6 +1,11 @@
+"""Docstring."""
 SENSOR = "SENSOR"
 
+
 class Device:
-    def __init__(self, name, type):
+    """Docstring."""
+
+    def __init__(self, name, device_type) -> None:
+        """Docstring."""
         self.name = name
-        self.type = type
+        self.type = device_type

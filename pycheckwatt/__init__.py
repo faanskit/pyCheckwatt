@@ -1,7 +1,8 @@
+"""Docstring."""
 from __future__ import annotations
-from datetime import datetime, timedelta
 
 import base64
+from datetime import datetime, timedelta
 import json
 import logging
 import re
@@ -14,7 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 class CheckwattManager:
     """Docstring."""
 
-    def __init__(self, username, password):
+    def __init__(self, username, password) -> None:
         """Docstring."""
         if username is None or password is None:
             raise ValueError("Username and password must be provided.")
@@ -23,6 +24,11 @@ class CheckwattManager:
         self.username = username
         self.password = password
         self.revenue = None
+        self.jwt_token = None
+        self.refresh_token = None
+        self.customer_details = None
+        self.battery_registration = None
+        self.logbook_entries = None
 
     async def __aenter__(self):
         """Docstring."""
@@ -94,15 +100,25 @@ class CheckwattManager:
                 self.base_url + endpoint, headers=headers
             ) as response:
                 data = await response.json()
-                self.jwt_token = data.get("JwtToken")
-                self.refresh_token = data.get("RefreshToken")
-                return True
+                if response.status == 200:
+                    self.jwt_token = data.get("JwtToken")
+                    self.refresh_token = data.get("RefreshToken")
+                    return True
+                elif response.status == 401:
+                    _LOGGER.error(
+                        "Unauthorized: Check your checkwatt authentication credentials"
+                    )
+                    return False
+                else:
+                    _LOGGER.error("Unexpected HTTP status code: %s", response.status)
+                    return False
 
         except ClientError as e:
-            _LOGGER.error(f"An error occurred during login: {e}")
+            _LOGGER.error("An error occurred during login: %s", e)
             return False
 
     async def get_customer_details(self):
+        """Docstring."""
         try:
             endpoint = "/controlpanel/CustomerDetail"
 
@@ -141,10 +157,11 @@ class CheckwattManager:
                 return self.customer_details["Id"]
 
         except ClientError as e:
-            _LOGGER.error(f"An error occurred during the CustomerDetail request: {e}")
+            _LOGGER.error("An error occurred during the CustomerDetail request: %s", e)
             return None
 
     async def get_fcrd_revenue(self):
+        """Docstring."""
         try:
             fromDate = datetime.now().strftime("%Y-%m-%d")
             end_date = datetime.now() + timedelta(days=2)
@@ -175,11 +192,12 @@ class CheckwattManager:
                 self.revenue = await response.json()
 
         except ClientError as e:
-            _LOGGER.error(f"An error occurred during the CustomerDetail request: {e}")
+            _LOGGER.error("An error occurred during the CustomerDetail request: %s", e)
             return None
 
     @property
     def inverter_make_and_model(self):
+        """Docstring."""
         if (
             "Inverter" in self.battery_registration
             and "InverterModel" in self.battery_registration
@@ -190,6 +208,7 @@ class CheckwattManager:
 
     @property
     def battery_make_and_model(self):
+        """Docstring."""
         if (
             "BatteryModel" in self.battery_registration
             and "BatterySystem" in self.battery_registration
@@ -201,6 +220,7 @@ class CheckwattManager:
 
     @property
     def exectricity_provider(self):
+        """Docstring."""
         if (
             "ElectricityCompany" in self.battery_registration
             and "Dso" in self.battery_registration
@@ -212,6 +232,7 @@ class CheckwattManager:
 
     @property
     def registred_owner(self):
+        """Docstring."""
         if "FirstName" in self.customer_details and "LastName" in self.customer_details:
             resp = f"{self.customer_details['FirstName']}"
             resp += f" {self.customer_details['LastName']}"
@@ -222,7 +243,7 @@ class CheckwattManager:
 
     @property
     def today_revenue(self):
-        """Whatever."""
+        """Docstring."""
         if self.revenue is not None:
             if len(self.revenue) != 0:
                 if "Revenue" in self.revenue[0]:
