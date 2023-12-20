@@ -7,7 +7,7 @@ import json
 import logging
 import re
 
-from aiohttp import ClientError, ClientSession
+from aiohttp import ClientError, ClientResponseError, ClientSession
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,6 +39,23 @@ class CheckwattManager:
     async def __aexit__(self, exc_type, exc_value, traceback):
         """Asynchronous exit."""
         await self.session.close()
+
+    def _get_headers(self):
+        """Define common headers."""
+
+        return {
+            "accept": "application/json, text/plain, */*",
+            "accept-language": "sv-SE,sv;q=0.9,en-SE;q=0.8,en;q=0.7,en-US;q=0.6",
+            "content-type": "application/json",
+            "sec-ch-ua": '"Chromium";v="112", "Google Chrome";v="112", "Not:A-Brand";v="99"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "cross-site",
+            "wslog-os": "",
+            "wslog-platform": "controlpanel",
+        }
 
     def _extract_content_and_logbook(self, input_string):
         """Pull the registred information from the logbook."""
@@ -72,6 +89,16 @@ class CheckwattManager:
 
         return battery_registration, logbook_entries
 
+    async def handle_client_error(self, endpoint, headers, error):
+        """Handle ClientError and log relevant information."""
+        _LOGGER.error(
+            "An error occurred during the request. URL: %s, Headers: %s. Error: %s",
+            self.base_url + endpoint,
+            headers,
+            error,
+        )
+        return False
+
     async def login(self):
         """Login to Checkwatt."""
         try:
@@ -83,18 +110,8 @@ class CheckwattManager:
 
             # Define headers with the encoded credentials
             headers = {
-                "accept": "application/json, text/plain, */*",
-                "accept-language": "sv-SE,sv;q=0.9,en-SE;q=0.8,en;q=0.7,en-US;q=0.6",
+                **self._get_headers(),
                 "authorization": f"Basic {encoded_credentials}",
-                "content-type": "application/json",
-                "sec-ch-ua": '"Chromium";v="112", "Google Chrome";v="112", "Not:A-Brand";v="99"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
-                "sec-fetch-dest": "empty",
-                "sec-fetch-mode": "cors",
-                "sec-fetch-site": "cross-site",
-                "wslog-os": "",
-                "wslog-platform": "controlpanel",
             }
 
             async with self.session.get(
@@ -105,6 +122,7 @@ class CheckwattManager:
                     self.jwt_token = data.get("JwtToken")
                     self.refresh_token = data.get("RefreshToken")
                     return True
+
                 if response.status == 401:
                     _LOGGER.error(
                         "Unauthorized: Check your checkwatt authentication credentials"
@@ -114,9 +132,8 @@ class CheckwattManager:
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
                 return False
 
-        except ClientError as e:
-            _LOGGER.error("An error occurred during login: %s", e)
-            return False
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
 
     async def get_customer_details(self):
         """Fetch customer details from Checkwatt."""
@@ -125,65 +142,52 @@ class CheckwattManager:
 
             # Define headers with the JwtToken
             headers = {
-                "accept": "application/json, text/plain, */*",
-                "accept-language": "sv-SE,sv;q=0.9,en-SE;q=0.8,en;q=0.7,en-US;q=0.6",
+                **self._get_headers(),
                 "authorization": f"Bearer {self.jwt_token}",
-                "content-type": "application/json",
-                "sec-ch-ua": '"Chromium";v="112", "Google Chrome";v="112", "Not:A-Brand";v="99"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
-                "sec-fetch-dest": "empty",
-                "sec-fetch-mode": "cors",
-                "sec-fetch-site": "cross-site",
-                "wslog-os": "",
-                "wslog-platform": "controlpanel",
             }
 
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
             ) as response:
                 response.raise_for_status()
-                self.customer_details = await response.json()
+                if response.status == 200:
+                    self.customer_details = await response.json()
 
-                meters = self.customer_details.get("Meter", [])
-                if meters:
-                    first_meter = meters[0]
-                    logbook = first_meter.get("Logbook")
-                    if logbook:
-                        (
-                            self.battery_registration,
-                            self.logbook_entries,
-                        ) = self._extract_content_and_logbook(logbook)
+                    meters = self.customer_details.get("Meter", [])
+                    if meters:
+                        first_meter = meters[0]
+                        logbook = first_meter.get("Logbook")
+                        if logbook:
+                            (
+                                self.battery_registration,
+                                self.logbook_entries,
+                            ) = self._extract_content_and_logbook(logbook)
 
-                return True
+                    return True
 
-        except ClientError as e:
-            _LOGGER.error("An error occurred during the CustomerDetail request: %s", e)
-            return False
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
 
     async def get_fcrd_revenue(self):
         """Fetch FCR-D revenues from checkwatt."""
         try:
-            fromDate = datetime.now().strftime("%Y-%m-%d")
+            from_date = datetime.now().strftime("%Y-%m-%d")
             end_date = datetime.now() + timedelta(days=2)
-            toDate = end_date.strftime("%Y-%m-%d")
+            to_date = end_date.strftime("%Y-%m-%d")
 
-            endpoint = f"/ems/fcrd/revenue?fromDate={fromDate}&toDate={toDate}"
+            endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
 
             # Define headers with the JwtToken
             headers = {
-                "accept": "application/json, text/plain, */*",
-                "accept-language": "sv-SE,sv;q=0.9,en-SE;q=0.8,en;q=0.7,en-US;q=0.6",
+                **self._get_headers(),
                 "authorization": f"Bearer {self.jwt_token}",
-                "content-type": "application/json",
-                "sec-ch-ua": '"Chromium";v="112", "Google Chrome";v="112", "Not:A-Brand";v="99"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
-                "sec-fetch-dest": "empty",
-                "sec-fetch-mode": "cors",
-                "sec-fetch-site": "cross-site",
-                "wslog-os": "",
-                "wslog-platform": "controlpanel",
             }
 
             # First fetch the revenue
@@ -192,24 +196,32 @@ class CheckwattManager:
             ) as response:
                 response.raise_for_status()
                 self.revenue = await response.json()
+                if response.status == 200:
+                    # Then fetch the service fees
+                    endpoint = (
+                        f"/ems/service/fees?fromDate={from_date}&toDate={to_date}"
+                    )
+                    async with self.session.get(
+                        self.base_url + endpoint, headers=headers
+                    ) as response:
+                        response.raise_for_status()
+                        self.fees = await response.json()
+                        if response.status == 200:
+                            return True
 
-                # Then fetch the service fees
-                endpoint = f"/ems/service/fees?fromDate={fromDate}&toDate={toDate}"
-                async with self.session.get(
-                    self.base_url + endpoint, headers=headers
-                ) as response:
-                    response.raise_for_status()
-                    self.fees = await response.json()
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
 
-                return True
-
-        except ClientError as e:
-            _LOGGER.error("An error occurred during the CustomerDetail request: %s", e)
-            return False
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
 
     @property
     def inverter_make_and_model(self):
-        """Docstring."""
+        """Property for inverter make and model. Not used by HA integration.."""
         if (
             "Inverter" in self.battery_registration
             and "InverterModel" in self.battery_registration
@@ -260,15 +272,34 @@ class CheckwattManager:
         revenue = 0
         fees = 0
         if self.revenue is not None:
-            if len(self.revenue) != 0:
+            if len(self.revenue) > 0:
                 if "Revenue" in self.revenue[0]:
                     revenue = self.revenue[0]["Revenue"]
 
         if self.fees is not None:
             if "FCRD" in self.fees:
-                if len(self.fees["FCRD"]) != 0:
+                if len(self.fees["FCRD"]) > 0:
                     # Take note: It is called Revenue also in fees
                     if "Revenue" in self.fees["FCRD"][0]:
                         fees = self.fees["FCRD"][0]["Revenue"]
+
+        return revenue - fees
+
+    @property
+    def tomorrow_revenue(self):
+        """Property for tomorrow's revenue."""
+        revenue = 0
+        fees = 0
+        if self.revenue is not None:
+            if len(self.revenue) > 1:
+                if "Revenue" in self.revenue[1]:
+                    revenue = self.revenue[1]["Revenue"]
+
+        if self.fees is not None:
+            if "FCRD" in self.fees:
+                if len(self.fees["FCRD"]) > 1:
+                    # Take note: It is called Revenue also in fees
+                    if "Revenue" in self.fees["FCRD"][1]:
+                        fees = self.fees["FCRD"][1]["Revenue"]
 
         return revenue - fees
