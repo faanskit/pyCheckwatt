@@ -154,11 +154,11 @@ class CheckwattManager:
                             self.logbook_entries,
                         ) = self._extract_content_and_logbook(logbook)
 
-                return self.customer_details["Id"]
+                return True
 
         except ClientError as e:
             _LOGGER.error("An error occurred during the CustomerDetail request: %s", e)
-            return None
+            return False
 
     async def get_fcrd_revenue(self):
         """Docstring."""
@@ -190,10 +190,11 @@ class CheckwattManager:
             ) as response:
                 response.raise_for_status()
                 self.revenue = await response.json()
+                return True
 
         except ClientError as e:
             _LOGGER.error("An error occurred during the CustomerDetail request: %s", e)
-            return None
+            return False
 
     @property
     def inverter_make_and_model(self):
@@ -240,6 +241,7 @@ class CheckwattManager:
             resp += f" {self.customer_details['ZipCode']}"
             resp += f" {self.customer_details['City']})"
             return resp
+        return None
 
     @property
     def today_revenue(self):
