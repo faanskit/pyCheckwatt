@@ -32,7 +32,8 @@ async def main():
                     print(entry)
 
                 await check_watt_instance.get_fcrd_revenue()
-                print(f"Today revenue: {check_watt_instance.today_revenue}")
+                print(f"\nToday revenue: {round(check_watt_instance.today_revenue, 2)}")
+                print(f"Tomorrow revenue: {round(check_watt_instance.tomorrow_revenue, 2)}")
 
         except Exception as e:
             print(f"An error occurred: {e}")
