@@ -1,4 +1,4 @@
-"""Docstring."""
+"""Checkwatt module."""
 from __future__ import annotations
 
 import base64
@@ -13,10 +13,10 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class CheckwattManager:
-    """Docstring."""
+    """Checkwatt manager."""
 
     def __init__(self, username, password) -> None:
-        """Docstring."""
+        """Initialize the checkwatt manager."""
         if username is None or password is None:
             raise ValueError("Username and password must be provided.")
         self.session = None
@@ -24,6 +24,7 @@ class CheckwattManager:
         self.username = username
         self.password = password
         self.revenue = None
+        self.fees = None
         self.jwt_token = None
         self.refresh_token = None
         self.customer_details = None
@@ -31,16 +32,16 @@ class CheckwattManager:
         self.logbook_entries = None
 
     async def __aenter__(self):
-        """Docstring."""
+        """Asynchronous enter."""
         self.session = ClientSession()
         return self
 
     async def __aexit__(self, exc_type, exc_value, traceback):
-        """Docstring."""
+        """Asynchronous exit."""
         await self.session.close()
 
     def _extract_content_and_logbook(self, input_string):
-        """Docstring."""
+        """Pull the registred information from the logbook."""
 
         # Define the pattern to match the content between the tags
         pattern = re.compile(
@@ -72,7 +73,7 @@ class CheckwattManager:
         return battery_registration, logbook_entries
 
     async def login(self):
-        """Docstring."""
+        """Login to Checkwatt."""
         try:
             credentials = f"{self.username}:{self.password}"
             encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
@@ -104,21 +105,21 @@ class CheckwattManager:
                     self.jwt_token = data.get("JwtToken")
                     self.refresh_token = data.get("RefreshToken")
                     return True
-                elif response.status == 401:
+                if response.status == 401:
                     _LOGGER.error(
                         "Unauthorized: Check your checkwatt authentication credentials"
                     )
                     return False
-                else:
-                    _LOGGER.error("Unexpected HTTP status code: %s", response.status)
-                    return False
+
+                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
+                return False
 
         except ClientError as e:
             _LOGGER.error("An error occurred during login: %s", e)
             return False
 
     async def get_customer_details(self):
-        """Docstring."""
+        """Fetch customer details from Checkwatt."""
         try:
             endpoint = "/controlpanel/CustomerDetail"
 
@@ -161,7 +162,7 @@ class CheckwattManager:
             return False
 
     async def get_fcrd_revenue(self):
-        """Docstring."""
+        """Fetch FCR-D revenues from checkwatt."""
         try:
             fromDate = datetime.now().strftime("%Y-%m-%d")
             end_date = datetime.now() + timedelta(days=2)
@@ -185,11 +186,21 @@ class CheckwattManager:
                 "wslog-platform": "controlpanel",
             }
 
+            # First fetch the revenue
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
             ) as response:
                 response.raise_for_status()
                 self.revenue = await response.json()
+
+                # Then fetch the service fees
+                endpoint = f"/ems/service/fees?fromDate={fromDate}&toDate={toDate}"
+                async with self.session.get(
+                    self.base_url + endpoint, headers=headers
+                ) as response:
+                    response.raise_for_status()
+                    self.fees = await response.json()
+
                 return True
 
         except ClientError as e:
@@ -209,7 +220,7 @@ class CheckwattManager:
 
     @property
     def battery_make_and_model(self):
-        """Docstring."""
+        """Property for battery make and model. Not used by HA integration."""
         if (
             "BatteryModel" in self.battery_registration
             and "BatterySystem" in self.battery_registration
@@ -221,7 +232,7 @@ class CheckwattManager:
 
     @property
     def exectricity_provider(self):
-        """Docstring."""
+        """Property for electricity provides. Not used by HA integration."""
         if (
             "ElectricityCompany" in self.battery_registration
             and "Dso" in self.battery_registration
@@ -233,7 +244,7 @@ class CheckwattManager:
 
     @property
     def registred_owner(self):
-        """Docstring."""
+        """Property for registred owner. Not used by HA integration.."""
         if "FirstName" in self.customer_details and "LastName" in self.customer_details:
             resp = f"{self.customer_details['FirstName']}"
             resp += f" {self.customer_details['LastName']}"
@@ -245,9 +256,19 @@ class CheckwattManager:
 
     @property
     def today_revenue(self):
-        """Docstring."""
+        """Property for today's revenue."""
+        revenue = 0
+        fees = 0
         if self.revenue is not None:
             if len(self.revenue) != 0:
                 if "Revenue" in self.revenue[0]:
-                    return self.revenue[0]["Revenue"]
-        return None
+                    revenue = self.revenue[0]["Revenue"]
+
+        if self.fees is not None:
+            if "FCRD" in self.fees:
+                if len(self.fees["FCRD"]) != 0:
+                    # Take note: It is called Revenue also in fees
+                    if "Revenue" in self.fees["FCRD"][0]:
+                        fees = self.fees["FCRD"][0]["Revenue"]
+
+        return revenue - fees
