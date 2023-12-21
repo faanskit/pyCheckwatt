@@ -41,6 +41,14 @@ async def main(show_details=False):
                 print(f"\nToday revenue: {round(check_watt_instance.today_revenue, 2)}")
                 print(f"Tomorrow revenue: {round(check_watt_instance.tomorrow_revenue, 2)}")
 
+                await check_watt_instance.get_power_data()
+                
+                print("\nEnergy\n=====")
+                print(f"Solar: {check_watt_instance.total_solar_energy}")
+                print(f"Charging: {check_watt_instance.total_charging_energy}")
+                print(f"Discharging: {check_watt_instance.total_discharging_energy}")
+                print(f"Import: {check_watt_instance.total_import_energy}")
+                print(f"Export: {check_watt_instance.total_export_energy}")
 
                 if show_details:
                     print("\nCustomer Details\n===============")
