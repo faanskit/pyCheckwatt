@@ -33,6 +33,7 @@ class CheckwattManager:
         self.fcrd_state = None
         self.fcrd_percentage = None
         self.fcrd_timestamp = None
+        self.power_data = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -236,6 +237,52 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
+    def _build_series_endpoint(self, grouping):
+        end_date = datetime.now() + timedelta(days=2)
+        to_date = end_date.strftime("%Y")
+        endpoint = f"/datagrouping/series?grouping={grouping}&fromdate=1923&todate={to_date}"
+
+        meters = self.customer_details.get("Meter", [])
+        if meters:
+            for meter in meters:
+                if "Id" in meter:
+                    endpoint += f"&meterId={meter['Id']}"
+            return endpoint
+        else:
+            return None
+
+    async def get_power_data(self):
+        """Fetch Power Data from checkwatt."""
+
+        try:
+            endpoint = self._build_series_endpoint(3) #0: Hourly, 1: Daily, 2: Monthly, 3: Yearly
+
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    self.power_data = await response.json()
+                    return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
+
     @property
     def inverter_make_and_model(self):
         """Property for inverter make and model. Not used by HA integration.."""
@@ -321,3 +368,34 @@ class CheckwattManager:
 
         return revenue - fees
 
+    def _get_meter_total(self, meter_type):
+        """Solar, Charging, Discharging, EDIEL_E17, EDIEL_E18, Soc meter summary."""
+        sum = 0
+        meters = self.power_data.get("Meters", [])
+        for meter in meters:
+            if "InstallationType" in meter and "Measurements" in meter:
+                if meter["InstallationType"] == meter_type:
+                    for measurement in meter["Measurements"]:
+                        if "Value" in measurement:
+                            sum += measurement["Value"]
+        return sum
+
+    @property
+    def total_solar_energy(self):
+        return self._get_meter_total("Solar")
+
+    @property
+    def total_charging_energy(self):
+        return self._get_meter_total("Charging")
+
+    @property
+    def total_discharging_energy(self):
+        return self._get_meter_total("Discharging")
+    
+    @property
+    def total_import_energy(self):
+        return self._get_meter_total("EDIEL_E17")
+    
+    @property
+    def total_export_energy(self):
+        return self._get_meter_total("EDIEL_E18")
