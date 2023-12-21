@@ -30,6 +30,9 @@ class CheckwattManager:
         self.customer_details = None
         self.battery_registration = None
         self.logbook_entries = None
+        self.fcrd_state = None
+        self.fcrd_percentage = None
+        self.fcrd_timestamp = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -88,6 +91,16 @@ class CheckwattManager:
         ]
 
         return battery_registration, logbook_entries
+
+    def _extract_fcr_d_state(self):
+        pattern = re.compile(r"\[ FCR-D (ACTIVATED|DEACTIVATE) \].*?(\d+,\d+/\d+,\d+/\d+,\d+ %).*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+        for entry in self.logbook_entries:
+            match = pattern.search(entry)
+            if match:
+                self.fcrd_state = match.group(1)  # FCR-D state: ACTIVATED or DEACTIVATED
+                self.fcrd_percentage = match.group(2)  # Percentage, e.g., "99,0/2,9/97,7 %"
+                self.fcrd_timestamp = match.group(3)  # Timestamp, e.g., "2023-12-20 00:11:45"
+
 
     async def handle_client_error(self, endpoint, headers, error):
         """Handle ClientError and log relevant information."""
@@ -155,13 +168,17 @@ class CheckwattManager:
 
                     meters = self.customer_details.get("Meter", [])
                     if meters:
-                        first_meter = meters[0]
-                        logbook = first_meter.get("Logbook")
+                        soc_meter = next((meter for meter in meters if meter.get("InstallationType") == "SoC"), None)
+                        if not soc_meter:
+                            _LOGGER.error("No SoC meter found")
+                            return False
+                        logbook = soc_meter.get("Logbook")
                         if logbook:
                             (
                                 self.battery_registration,
                                 self.logbook_entries,
                             ) = self._extract_content_and_logbook(logbook)
+                            self._extract_fcr_d_state()
 
                     return True
 
@@ -303,3 +320,4 @@ class CheckwattManager:
                         fees = self.fees["FCRD"][1]["Revenue"]
 
         return revenue - fees
+
