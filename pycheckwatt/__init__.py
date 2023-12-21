@@ -34,6 +34,8 @@ class CheckwattManager:
         self.fcrd_percentage = None
         self.fcrd_timestamp = None
         self.power_data = None
+        self.price_zone = None
+        self.spot_prices = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -94,14 +96,21 @@ class CheckwattManager:
         return battery_registration, logbook_entries
 
     def _extract_fcr_d_state(self):
-        pattern = re.compile(r"\[ FCR-D (ACTIVATED|DEACTIVATE) \].*?(\d+,\d+/\d+,\d+/\d+,\d+ %).*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+        pattern = re.compile(
+            r"\[ FCR-D (ACTIVATED|DEACTIVATE) \].*?(\d+,\d+/\d+,\d+/\d+,\d+ %).*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
+        )
         for entry in self.logbook_entries:
             match = pattern.search(entry)
             if match:
-                self.fcrd_state = match.group(1)  # FCR-D state: ACTIVATED or DEACTIVATED
-                self.fcrd_percentage = match.group(2)  # Percentage, e.g., "99,0/2,9/97,7 %"
-                self.fcrd_timestamp = match.group(3)  # Timestamp, e.g., "2023-12-20 00:11:45"
-
+                self.fcrd_state = match.group(
+                    1
+                )  # FCR-D state: ACTIVATED or DEACTIVATED
+                self.fcrd_percentage = match.group(
+                    2
+                )  # Percentage, e.g., "99,0/2,9/97,7 %"
+                self.fcrd_timestamp = match.group(
+                    3
+                )  # Timestamp, e.g., "2023-12-20 00:11:45"
 
     async def handle_client_error(self, endpoint, headers, error):
         """Handle ClientError and log relevant information."""
@@ -169,7 +178,14 @@ class CheckwattManager:
 
                     meters = self.customer_details.get("Meter", [])
                     if meters:
-                        soc_meter = next((meter for meter in meters if meter.get("InstallationType") == "SoC"), None)
+                        soc_meter = next(
+                            (
+                                meter
+                                for meter in meters
+                                if meter.get("InstallationType") == "SoC"
+                            ),
+                            None,
+                        )
                         if not soc_meter:
                             _LOGGER.error("No SoC meter found")
                             return False
@@ -240,7 +256,9 @@ class CheckwattManager:
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
         to_date = end_date.strftime("%Y")
-        endpoint = f"/datagrouping/series?grouping={grouping}&fromdate=1923&todate={to_date}"
+        endpoint = (
+            f"/datagrouping/series?grouping={grouping}&fromdate=1923&todate={to_date}"
+        )
 
         meters = self.customer_details.get("Meter", [])
         if meters:
@@ -255,7 +273,9 @@ class CheckwattManager:
         """Fetch Power Data from checkwatt."""
 
         try:
-            endpoint = self._build_series_endpoint(3) #0: Hourly, 1: Daily, 2: Monthly, 3: Yearly
+            endpoint = self._build_series_endpoint(
+                3
+            )  # 0: Hourly, 1: Daily, 2: Monthly, 3: Yearly
 
             # Define headers with the JwtToken
             headers = {
@@ -282,6 +302,70 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
+    async def get_price_zone(self):
+        """Fetch Price Zone from checkwatt."""
+
+        try:
+            endpoint = "/ems/pricezone"
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    self.price_zone = await response.text()
+                    return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
+    async def get_spot_price(self):
+        """Fetch Spot Price from checkwatt."""
+
+        try:
+            from_date = datetime.now().strftime("%Y-%m-%d")
+            end_date = datetime.now() + timedelta(days=1)
+            to_date = end_date.strftime("%Y-%m-%d")
+            if self.price_zone is None:
+                await self.get_price_zone()
+            endpoint = f"/ems/spotprice?zone={self.price_zone}&fromDate={from_date}&toDate={to_date}"
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    self.spot_prices = await response.json()
+                    return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
 
     @property
     def inverter_make_and_model(self):
@@ -370,32 +454,48 @@ class CheckwattManager:
 
     def _get_meter_total(self, meter_type):
         """Solar, Charging, Discharging, EDIEL_E17, EDIEL_E18, Soc meter summary."""
-        sum = 0
+        meter_total = 0
         meters = self.power_data.get("Meters", [])
         for meter in meters:
             if "InstallationType" in meter and "Measurements" in meter:
                 if meter["InstallationType"] == meter_type:
                     for measurement in meter["Measurements"]:
                         if "Value" in measurement:
-                            sum += measurement["Value"]
-        return sum
+                            meter_total += measurement["Value"]
+        return meter_total
 
     @property
     def total_solar_energy(self):
+        """Property for Solar Energy."""
         return self._get_meter_total("Solar")
 
     @property
     def total_charging_energy(self):
+        """Property for Battery Charging Energy."""
         return self._get_meter_total("Charging")
 
     @property
     def total_discharging_energy(self):
+        """Property for Battery Discharging Energy."""
         return self._get_meter_total("Discharging")
-    
+
     @property
     def total_import_energy(self):
+        """Property for Imported (Bought) Energy."""
         return self._get_meter_total("EDIEL_E17")
-    
+
     @property
     def total_export_energy(self):
+        """Property for Exported (Sold) Energy."""
         return self._get_meter_total("EDIEL_E18")
+
+    def get_spot_price_excl_vat(self, now_hour: int):
+        """Property for current spot price."""
+        spot_prices = self.spot_prices.get("Prices", [])
+        if spot_prices and 0 <= now_hour < len(spot_prices):
+            spot_price = spot_prices[now_hour]["Value"]
+            _LOGGER.debug("Time is %d and spot price is %f", now_hour, spot_price)
+            return spot_price
+
+        _LOGGER.warning("Unable to retrieve spot price for the current hour")
+        return None
