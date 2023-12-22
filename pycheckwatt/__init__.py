@@ -384,6 +384,9 @@ class CheckwattManager:
             resp += f" {self.battery_registration['BatteryModel']}"
             resp += f" ({self.battery_registration['BatteryPowerKW']}kW, {self.battery_registration['BatteryCapacityKWh']}kWh)"
             return resp
+            print(resp)
+        else:
+            return("Information om batterimodell kunde inte hittas")
 
     @property
     def electricity_provider(self):
