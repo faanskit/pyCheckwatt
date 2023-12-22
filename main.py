@@ -1,3 +1,4 @@
+#DN
 import argparse
 import os
 import json
@@ -25,9 +26,10 @@ async def main(show_details=False):
                 print(check_watt_instance.registred_owner)
 
                 print("\nSystem\n======")
-                print(check_watt_instance.inverter_make_and_model)
+                print("Charge peak",check_watt_instance.battery_charge_peak)
+                print("Discharge peak",check_watt_instance.battery_discharge_peak)
                 print(check_watt_instance.battery_make_and_model)
-                print(check_watt_instance.exectricity_provider)
+                print(check_watt_instance.electricity_provider)
 
                 print("\nLogbook Entries\n===============")
                 for entry in check_watt_instance.logbook_entries:
@@ -38,17 +40,16 @@ async def main(show_details=False):
                 print(f"FCR-D State: {check_watt_instance.fcrd_state}")
                 print(f"FCR-D Percentage: {check_watt_instance.fcrd_percentage}")
                 print(f"FCR-D Date: {check_watt_instance.fcrd_timestamp}")
-                print(f"\nToday revenue: {round(check_watt_instance.today_revenue, 2)}")
-                print(f"Tomorrow revenue: {round(check_watt_instance.tomorrow_revenue, 2)}")
+                print(f"\nToday revenue: {round(check_watt_instance.today_revenue, 2)} kr")
+                print(f"Tomorrow revenue: {round(check_watt_instance.tomorrow_revenue, 2)} kr")
 
                 await check_watt_instance.get_power_data()
-                
                 print("\nEnergy\n=====")
-                print(f"Solar: {check_watt_instance.total_solar_energy}")
-                print(f"Charging: {check_watt_instance.total_charging_energy}")
-                print(f"Discharging: {check_watt_instance.total_discharging_energy}")
-                print(f"Import: {check_watt_instance.total_import_energy}")
-                print(f"Export: {check_watt_instance.total_export_energy}")
+                print(f"Solar: {check_watt_instance.total_solar_energy} kWh")
+                print(f"Charging: {check_watt_instance.total_charging_energy} kWh")
+                print(f"Discharging: {check_watt_instance.total_discharging_energy} kWh")
+                print(f"Import: {check_watt_instance.total_import_energy} kWh")
+                print(f"Export: {check_watt_instance.total_export_energy} kWh")
 
                 if show_details:
                     print("\nCustomer Details\n===============")
