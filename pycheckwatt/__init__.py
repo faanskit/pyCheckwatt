@@ -69,9 +69,7 @@ class CheckwattManager:
         """Pull the registred information from the logbook."""
 
         # Define the pattern to match the content between the tags
-        pattern = re.compile(
-            r"#BEGIN_BATTERY_REGISTRATION(.*?)#END_BATTERY_REGISTRATION", re.DOTALL
-        )
+        pattern = re.compile(r"#BEGIN_BATTERY_REGISTRATION(.*?)#END_BATTERY_REGISTRATION", re.DOTALL)
 
         # Find all matches in the input string
         matches = re.findall(pattern, input_string)
@@ -89,26 +87,21 @@ class CheckwattManager:
         logbook_entries = [
             entry.strip()
             for entry in logbook_entries
-            if not (
-                "#BEGIN_BATTERY_REGISTRATION" in entry
-                or "#END_BATTERY_REGISTRATION" in entry
-            )
+            if not ("#BEGIN_BATTERY_REGISTRATION" in entry or "#END_BATTERY_REGISTRATION" in entry)
         ]
 
         return battery_registration, logbook_entries
 
     def _extract_fcr_d_state(self):
-        pattern = re.compile(
-            r"\[ FCR-D (ACTIVATED|DEACTIVATE) \].*?(\d+,\d+/\d+,\d+/\d+,\d+ %).*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
-        )
+        pattern = re.compile(r"\[ FCR-D (ACTIVATED|DEACTIVATE) \].*?(\d+,\d+/\d+,\d+/\d+,\d+ %).*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
         for entry in self.logbook_entries:
             match = pattern.search(entry)
             if match:
                 self.fcrd_state = match.group(1)  # FCR-D state: ACTIVATED or DEACTIVATED
                 self.fcrd_percentage = match.group(2)  # Percentage, e.g., "99,0/2,9/97,7 %"
                 self.fcrd_timestamp = match.group(3) if match else None  # Timestamp, e.g., "2023-12-20 00:11:45"
-            print(self.fcrd_timestamp)
-            break
+#            print(self.fcrd_timestamp)
+            break # stop so we get the first row in logbook
 
     async def handle_client_error(self, endpoint, headers, error):
         """Handle ClientError and log relevant information."""
@@ -124,9 +117,7 @@ class CheckwattManager:
         """Login to Checkwatt."""
         try:
             credentials = f"{self.username}:{self.password}"
-            encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
-                "utf-8"
-            )
+            encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode("utf-8")
             endpoint = "/user/LoginEiB?audience=eib"
 
             # Define headers with the encoded credentials
@@ -145,9 +136,7 @@ class CheckwattManager:
                     return True
 
                 if response.status == 401:
-                    _LOGGER.error(
-                        "Unauthorized: Check your checkwatt authentication credentials"
-                    )
+                    _LOGGER.error("Unauthorized: Check your checkwatt authentication credentials")
                     return False
 
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
@@ -232,9 +221,7 @@ class CheckwattManager:
                 self.revenue = await response.json()
                 if response.status == 200:
                     # Then fetch the service fees
-                    endpoint = (
-                        f"/ems/service/fees?fromDate={from_date}&toDate={to_date}"
-                    )
+                    endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")
                     async with self.session.get(
                         self.base_url + endpoint, headers=headers
                     ) as response:
@@ -273,9 +260,7 @@ class CheckwattManager:
         """Fetch Power Data from checkwatt."""
 
         try:
-            endpoint = self._build_series_endpoint(
-                3
-            )  # 0: Hourly, 1: Daily, 2: Monthly, 3: Yearly
+            endpoint = self._build_series_endpoint(3)  # 0: Hourly, 1: Daily, 2: Monthly, 3: Yearly
 
             # Define headers with the JwtToken
             headers = {
@@ -458,7 +443,7 @@ class CheckwattManager:
                 if meter["InstallationType"] == meter_type:
                     for measurement in meter["Measurements"]:
                         if "Value" in measurement:
-                            meter_total += measurement["Value"]/1000
+                            meter_total += measurement["Value"]/1000 # to get answer to kWh
         return meter_total
 
     @property
