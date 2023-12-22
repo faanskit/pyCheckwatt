@@ -23,7 +23,11 @@ class CheckwattManager:
         self.username = username
         self.password = password
         self.revenue = None
+        self.revenueyear = None
+        self.revenueyeartotal = 0
         self.fees = None
+        self.feesyear = None
+        self.feesyeartotal = 0
         self.jwt_token = None
         self.refresh_token = None
         self.customer_details = None
@@ -240,6 +244,61 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
+
+
+
+    async def get_fcrd_revenueyear(self):
+        """Fetch FCR-D revenues from checkwatt."""
+        try:
+            year_date = datetime.now().strftime("%Y-10-01")
+            end_date = datetime.now() + timedelta(days=2)
+            to_date = end_date.strftime("%Y-%m-%d")
+
+            endpoint = f"/ems/fcrd/revenue?fromDate={year_date}&toDate={to_date}"
+
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as responseyear:
+                responseyear.raise_for_status()
+                self.revenueyear = await responseyear.json()
+               # print(self.revenueyear[0])
+                for each in self.revenueyear:
+                    self.revenueyeartotal += each["Revenue"]
+#                print(self.revenueyeartotal)
+                if responseyear.status == 200:
+                    # Then fetch the service fees
+                    endpoint = (f"/ems/service/fees?fromDate={year_date}&toDate={to_date}")
+                    async with self.session.get(
+                        self.base_url + endpoint, headers=headers
+                    ) as responseyear:
+                        responseyear.raise_for_status()
+                        self.feesyear = await responseyear.json()
+                        for each in self.feesyear["FCRD"]:
+#                            print("ahah")
+                            self.feesyeartotal += each["Revenue"]
+                        if responseyear.status == 200:
+#                            print(self.feesyeartotal)
+                            return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
+
+
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
         to_date = end_date.strftime("%Y")
@@ -369,7 +428,7 @@ class CheckwattManager:
             resp += f" {self.battery_registration['BatteryModel']}"
             resp += f" ({self.battery_registration['BatteryPowerKW']}kW, {self.battery_registration['BatteryCapacityKWh']}kWh)"
             return resp
-            print(resp)
+#            print(resp)
         else:
             return("Information om batterimodell kunde inte hittas")
 
@@ -396,6 +455,29 @@ class CheckwattManager:
         return None
 
     @property
+    def year_revenue(self):
+#        print("year")
+        """Property for today's revenue."""
+        revenueyear = 0
+        feesyear = 0
+        if self.revenueyeartotal is not None:
+#            if len(self.revenueyeartotal) > 0:
+               # if "Revenue" in self.revenueyeartoal:
+            revenueyear = self.revenueyeartotal
+#        print(revenueyear)
+#        print("aasoso")
+
+        if self.feesyeartotal is not None:
+#            if "FCRD" in self.feesyear:
+#                if len(self.feesyear["FCRD"]) > 0:
+                    # Take note: It is called Revenue also in fees
+#                    if "Revenue" in self.feesyear["FCRD"][0]:
+            feesyear = self.feesyeartotal
+#        print(self.feesyeartotal)
+
+        return revenueyear,feesyear
+
+    @property
     def today_revenue(self):
         """Property for today's revenue."""
         revenue = 0
@@ -412,7 +494,7 @@ class CheckwattManager:
                     if "Revenue" in self.fees["FCRD"][0]:
                         fees = self.fees["FCRD"][0]["Revenue"]
 
-        return revenue - fees
+        return revenue,fees
 
     @property
     def tomorrow_revenue(self):
@@ -431,7 +513,7 @@ class CheckwattManager:
                     if "Revenue" in self.fees["FCRD"][1]:
                         fees = self.fees["FCRD"][1]["Revenue"]
 
-        return revenue - fees
+        return revenue,fees
 
     def _get_meter_total(self, meter_type):
         """Solar, Charging, Discharging, EDIEL_E17, EDIEL_E18, Soc meter summary."""
@@ -443,7 +525,7 @@ class CheckwattManager:
                 if meter["InstallationType"] == meter_type:
                     for measurement in meter["Measurements"]:
                         if "Value" in measurement:
-                            meter_total += measurement["Value"]/1000 # to get answer to kWh
+                            meter_total += measurement["Value"] # to get answer to kWh
         return meter_total
 
     @property
