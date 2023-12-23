@@ -285,7 +285,7 @@ class CheckwattManager:
     async def get_fcrd_revenueyear(self):
         """Fetch FCR-D revenues from checkwatt."""
         try:
-            year_date = datetime.now().strftime("%Y-01-01")
+            year_date = datetime.now().strftime("%Y-10-01")
             end_date = datetime.now() + timedelta(days=2)
             to_date = end_date.strftime("%Y-%m-%d")
 
