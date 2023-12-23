@@ -42,6 +42,7 @@ class CheckwattManager:
         self.power_data = None
         self.price_zone = None
         self.spot_prices = None
+        self.firstcolor = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -332,9 +333,7 @@ class CheckwattManager:
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
         to_date = end_date.strftime("%Y")
-        endpoint = (
-            f"/datagrouping/series?grouping={grouping}&fromdate=1923&todate={to_date}"
-        )
+        endpoint = (f"/datagrouping/series?grouping={grouping}&fromdate=1923&todate={to_date}")
 
         meters = self.customer_details.get("Meter", [])
         if meters:
@@ -466,7 +465,7 @@ class CheckwattManager:
             resp += f" ({self.battery_registration['BatteryPowerKW']}kW, {self.battery_registration['BatteryCapacityKWh']}kWh)"
             return resp
         else:
-            return "Information om batterimodell kunde inte hittas"
+            return("Could not get any information about your battery")
 
     @property
     def electricity_provider(self):
