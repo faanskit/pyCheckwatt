@@ -1,3 +1,4 @@
+#DN
 import argparse
 import os
 import json
@@ -25,30 +26,48 @@ async def main(show_details=False):
                 print(check_watt_instance.registred_owner)
 
                 print("\nSystem\n======")
-                print(check_watt_instance.inverter_make_and_model)
+                print("Charge peak",check_watt_instance.battery_charge_peak)
+                print("Discharge peak",check_watt_instance.battery_discharge_peak)
                 print(check_watt_instance.battery_make_and_model)
-                print(check_watt_instance.exectricity_provider)
+                print(check_watt_instance.electricity_provider)
 
                 print("\nLogbook Entries\n===============")
                 for entry in check_watt_instance.logbook_entries:
                     print(entry)
 
                 await check_watt_instance.get_fcrd_revenue()
+                await check_watt_instance.get_fcrd_revenueyear()
                 print("\nFCR-D\n=====")
                 print(f"FCR-D State: {check_watt_instance.fcrd_state}")
                 print(f"FCR-D Percentage: {check_watt_instance.fcrd_percentage}")
                 print(f"FCR-D Date: {check_watt_instance.fcrd_timestamp}")
-                print(f"\nToday revenue: {round(check_watt_instance.today_revenue, 2)}")
-                print(f"Tomorrow revenue: {round(check_watt_instance.tomorrow_revenue, 2)}")
+                print("\n")
+                print('{:<24}  {:>6}  {:>0}'.format("Year compensation:", int(check_watt_instance.year_revenue[0]), "kr"))
+                print('{:<24}  {:>6}  {:>0}'.format("Year fee:", int(check_watt_instance.year_revenue[1]), "kr"))
+                print('{:<24}  {:>6}  {:>0}'.format("Year revenue:", int(check_watt_instance.year_revenue[0]-check_watt_instance.year_revenue[1]), "kr"))
+                print('{:<24}  {:>6}  {:>0}'.format("Today compensation:", int(check_watt_instance.today_revenue[0]), "kr"))
+                print('{:<24}  {:>6}  {:>0}'.format("Today fee:", int(check_watt_instance.today_revenue[1]), "kr"))
+                print('{:<24}  {:>6}  {:>0}'.format("Today revenue:", int(check_watt_instance.today_revenue[0]-check_watt_instance.today_revenue[1]), "kr"))
+                print('{:<24}  {:>6}  {:>0}'.format("Tomorrow compensation:", int(check_watt_instance.tomorrow_revenue[0]), "kr"))
+                print('{:<24}  {:>6}  {:>0}'.format("Tomorrow fee:", int(check_watt_instance.tomorrow_revenue[1]), "kr"))
+                print('{:<24}  {:>6}  {:>0}'.format("Tomorrow revenue:", int(check_watt_instance.tomorrow_revenue[0]-check_watt_instance.tomorrow_revenue[1]), "kr"))
+#                print(f"\nYear compensation: \t{round(check_watt_instance.year_revenue[0], 0)} kr")
+#                print(f"Year fee: \t\t{round(check_watt_instance.year_revenue[1], 0)} kr")
+#                print(f"Year revenue: \t\t{round(check_watt_instance.year_revenue[0]-check_watt_instance.year_revenue[1], 0)} kr")
+#                print(f"Today compensation: \t{round(check_watt_instance.today_revenue[0], 0)} kr")
+#                print(f"Today fee: \t\t{round(check_watt_instance.today_revenue[1], 0)} kr")
+#                print(f"Today revenue: \t\t{round(check_watt_instance.today_revenue[0]-check_watt_instance.today_revenue[1], 0)} kr")
+#                print(f"Tomorrow compensation: \t{round(check_watt_instance.tomorrow_revenue[0], 0)} kr")
+#                print(f"Tomorrow fee: \t\t{round(check_watt_instance.tomorrow_revenue[1], 0)} kr")
+#                print(f"Tomorrow revenue: \t{round(check_watt_instance.tomorrow_revenue[0]-check_watt_instance.tomorrow_revenue[1], 0)} kr")
 
                 await check_watt_instance.get_power_data()
-                
-                print("\nEnergy\n=====")
-                print(f"Solar: {check_watt_instance.total_solar_energy}")
-                print(f"Charging: {check_watt_instance.total_charging_energy}")
-                print(f"Discharging: {check_watt_instance.total_discharging_energy}")
-                print(f"Import: {check_watt_instance.total_import_energy}")
-                print(f"Export: {check_watt_instance.total_export_energy}")
+                print("\nEnergy\n======")
+                print(f"Solar: {check_watt_instance.total_solar_energy/1000} kWh")
+                print(f"Charging: {check_watt_instance.total_charging_energy/1000} kWh")
+                print(f"Discharging: {check_watt_instance.total_discharging_energy/1000} kWh")
+                print(f"Import: {check_watt_instance.total_import_energy/1000} kWh")
+                print(f"Export: {check_watt_instance.total_export_energy/1000} kWh")
 
                 if show_details:
                     print("\nCustomer Details\n===============")
