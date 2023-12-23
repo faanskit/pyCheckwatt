@@ -333,7 +333,9 @@ class CheckwattManager:
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
         to_date = end_date.strftime("%Y")
-        endpoint = (f"/datagrouping/series?grouping={grouping}&fromdate=1923&todate={to_date}")
+        endpoint = (
+            f"/datagrouping/series?grouping={grouping}&fromdate=1923&todate={to_date}"
+        )
 
         meters = self.customer_details.get("Meter", [])
         if meters:
@@ -465,7 +467,7 @@ class CheckwattManager:
             resp += f" ({self.battery_registration['BatteryPowerKW']}kW, {self.battery_registration['BatteryCapacityKWh']}kWh)"
             return resp
         else:
-            return("Could not get any information about your battery")
+            return "Could not get any information about your battery"
 
     @property
     def electricity_provider(self):
