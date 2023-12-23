@@ -1,4 +1,3 @@
-#DN
 from termcolor import colored
 import argparse
 import os
