@@ -1,4 +1,5 @@
 #DN
+from termcolor import colored
 import argparse
 import os
 import json
@@ -51,15 +52,6 @@ async def main(show_details=False):
                 print('{:<24}  {:>6}  {:>0}'.format("Tomorrow compensation:", int(check_watt_instance.tomorrow_revenue[0]), "kr"))
                 print('{:<24}  {:>6}  {:>0}'.format("Tomorrow fee:", int(check_watt_instance.tomorrow_revenue[1]), "kr"))
                 print('{:<24}  {:>6}  {:>0}'.format("Tomorrow revenue:", int(check_watt_instance.tomorrow_revenue[0]-check_watt_instance.tomorrow_revenue[1]), "kr"))
-#                print(f"\nYear compensation: \t{round(check_watt_instance.year_revenue[0], 0)} kr")
-#                print(f"Year fee: \t\t{round(check_watt_instance.year_revenue[1], 0)} kr")
-#                print(f"Year revenue: \t\t{round(check_watt_instance.year_revenue[0]-check_watt_instance.year_revenue[1], 0)} kr")
-#                print(f"Today compensation: \t{round(check_watt_instance.today_revenue[0], 0)} kr")
-#                print(f"Today fee: \t\t{round(check_watt_instance.today_revenue[1], 0)} kr")
-#                print(f"Today revenue: \t\t{round(check_watt_instance.today_revenue[0]-check_watt_instance.today_revenue[1], 0)} kr")
-#                print(f"Tomorrow compensation: \t{round(check_watt_instance.tomorrow_revenue[0], 0)} kr")
-#                print(f"Tomorrow fee: \t\t{round(check_watt_instance.tomorrow_revenue[1], 0)} kr")
-#                print(f"Tomorrow revenue: \t{round(check_watt_instance.tomorrow_revenue[0]-check_watt_instance.tomorrow_revenue[1], 0)} kr")
 
                 await check_watt_instance.get_power_data()
                 print("\nEnergy\n======")
