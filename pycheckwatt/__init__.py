@@ -241,47 +241,51 @@ class CheckwattManager:
 
 
     async def get_fcrd_revenueyear(self):
+        month = ["-01-01","-06-30","-07-01","-12-31"]
+        loop = 0
         """Fetch FCR-D revenues from checkwatt."""
         try:
-            year_date = datetime.now().strftime("%Y-10-01")
-            end_date = datetime.now() + timedelta(days=2)
-            to_date = end_date.strftime("%Y-%m-%d")
+            while loop < 3:
+                year_date = datetime.now().strftime("%Y")
+                end_date = year_date + month[loop+1]
+                year_date = year_date + month[loop]
 
-            endpoint = f"/ems/fcrd/revenue?fromDate={year_date}&toDate={to_date}"
+                endpoint = f"/ems/fcrd/revenue?fromDate={year_date}&toDate={end_date}"
 
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
+                # Define headers with the JwtToken
+                headers = {
+                    **self._get_headers(),
+                    "authorization": f"Bearer {self.jwt_token}",
+                }
 
-            # First fetch the revenue
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as responseyear:
-                responseyear.raise_for_status()
-                self.revenueyear = await responseyear.json()
-                for each in self.revenueyear:
-                    self.revenueyeartotal += each["Revenue"]
-                if responseyear.status == 200:
-                    # Then fetch the service fees
-                    endpoint = (f"/ems/service/fees?fromDate={year_date}&toDate={to_date}")
-                    async with self.session.get(
-                        self.base_url + endpoint, headers=headers
-                    ) as responseyear:
-                        responseyear.raise_for_status()
-                        self.feesyear = await responseyear.json()
-                        for each in self.feesyear["FCRD"]:
-                            self.feesyeartotal += each["Revenue"]
-                        if responseyear.status == 200:
-                            return True
+                # First fetch the revenue
+                async with self.session.get(
+                    self.base_url + endpoint, headers=headers
+                ) as responseyear:
+                    responseyear.raise_for_status()
+                    self.revenueyear = await responseyear.json()
+                    for each in self.revenueyear:
+                        self.revenueyeartotal += each["Revenue"]
+                    if responseyear.status == 200:
+                        # Then fetch the service fees
+                        endpoint = (f"/ems/service/fees?fromDate={year_date}&toDate={end_date}")
+                        async with self.session.get(
+                            self.base_url + endpoint, headers=headers
+                        ) as responseyear:
+                            responseyear.raise_for_status()
+                            self.feesyear = await responseyear.json()
+                            for each in self.feesyear["FCRD"]:
+                                self.feesyeartotal += each["Revenue"]
+                            if responseyear.status == 200:
+                                loop += 2
+            return True
 
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    responseyear.status,
-                )
-                return False
+            _LOGGER.error(
+                "Obtaining data from URL %s failed with status code %d",
+                self.base_url + endpoint,
+                responseyear.status,
+            )
+            return False
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
