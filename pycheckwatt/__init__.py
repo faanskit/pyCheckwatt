@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import json
 import logging
 import re
-
+from dateutil.relativedelta import relativedelta
 from aiohttp import ClientError, ClientResponseError, ClientSession
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,9 +22,13 @@ class CheckwattManager:
         self.base_url = "https://services.cnet.se/checkwattapi/v2"
         self.username = username
         self.password = password
+        self.dailyaverage = 0
+        self.monthestimate = 0
         self.revenue = None
         self.revenueyear = None
         self.revenueyeartotal = 0
+        self.revenuemonth = 0
+        self.feesmonth = 0
         self.fees = None
         self.feesyear = None
         self.feesyeartotal = 0
@@ -195,6 +199,68 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
+    async def get_fcrd_revenuemonth(self):
+        misseddays = 0
+        """Fetch FCR-D revenues from checkwatt."""
+        try:
+            from_date = datetime.now().strftime("%Y-%m-01")
+            to_date = datetime.now() + timedelta(days=2)
+            to_date = to_date.strftime("%Y-%m-%d")
+
+            lastday_date = datetime.now() + relativedelta(months=1)
+            lastday_date = datetime(year=lastday_date.year,month=lastday_date.month,day=1)
+            lastday_date = lastday_date - timedelta(days=1)
+            lastday = lastday_date.strftime("%d")
+
+            dayssofar = datetime.now() + timedelta(days=1)
+            dayssofar = dayssofar.strftime("%d")
+            daysleft = int(lastday)-int(dayssofar)
+
+            endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
+
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                revenue = await response.json()
+                for each in revenue:
+                    self.revenuemonth += each["Revenue"]
+                    if each["Revenue"] == 0:
+                        misseddays += 1
+                dayswithmoney = int(dayssofar)-misseddays
+                if response.status == 200:
+                    # Then fetch the service fees
+                    endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")
+                    async with self.session.get(
+                        self.base_url + endpoint, headers=headers
+                    ) as response:
+                        response.raise_for_status()
+                        fees = await response.json()
+                        for each in fees["FCRD"]:
+                            self.feesmonth += each["Revenue"]
+                        self.dailyaverage = ( int(self.revenuemonth) - int(self.feesmonth) ) / int(dayswithmoney)
+                        self.monthestimate = ( self.dailyaverage * daysleft ) + ( int(self.revenuemonth) - int(self.feesmonth) )
+                        if response.status == 200:
+                            return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
+
     async def get_fcrd_revenue(self):
         """Fetch FCR-D revenues from checkwatt."""
         try:
@@ -278,6 +344,10 @@ class CheckwattManager:
                                 self.feesyeartotal += each["Revenue"]
                             if responseyear.status == 200:
                                 loop += 2
+                            else:
+                                break
+                    else:
+                        break
             return True
 
             _LOGGER.error(
@@ -455,6 +525,28 @@ class CheckwattManager:
             feesyear = self.feesyeartotal
 
         return revenueyear,feesyear
+
+    @property
+    def month_revenue(self):
+        """Property for today's revenue."""
+        revenuemonth = 0
+        feesmonth = 0
+        dailyaverage = 0
+        monthestimate = 0
+        if self.revenuemonth is not None:
+            revenuemonth = self.revenuemonth
+
+        if self.feesmonth is not None:
+            feesmonth = self.feesmonth
+
+        if self.dailyaverage is not None:
+            dailyaverage = self.dailyaverage
+
+        if self.monthestimate is not None:
+            monthestimate = self.monthestimate
+
+
+        return revenuemonth,feesmonth, dailyaverage, monthestimate
 
     @property
     def today_revenue(self):
