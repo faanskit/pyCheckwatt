@@ -6,8 +6,9 @@ from datetime import datetime, timedelta
 import json
 import logging
 import re
-from dateutil.relativedelta import relativedelta
+
 from aiohttp import ClientError, ClientResponseError, ClientSession
+from dateutil.relativedelta import relativedelta
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -243,21 +244,23 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_fcrd_revenuemonth(self):
-        misseddays = 0
         """Fetch FCR-D revenues from checkwatt."""
+        misseddays = 0
         try:
             from_date = datetime.now().strftime("%Y-%m-01")
             to_date = datetime.now() + timedelta(days=2)
             to_date = to_date.strftime("%Y-%m-%d")
 
             lastday_date = datetime.now() + relativedelta(months=1)
-            lastday_date = datetime(year=lastday_date.year,month=lastday_date.month,day=1)
+            lastday_date = datetime(
+                year=lastday_date.year, month=lastday_date.month, day=1
+            )
             lastday_date = lastday_date - timedelta(days=1)
             lastday = lastday_date.strftime("%d")
 
             dayssofar = datetime.now() + timedelta(days=1)
             dayssofar = dayssofar.strftime("%d")
-            daysleft = int(lastday)-int(dayssofar)
+            daysleft = int(lastday) - int(dayssofar)
 
             endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
 
@@ -277,7 +280,7 @@ class CheckwattManager:
                     self.revenuemonth += each["Revenue"]
                     if each["Revenue"] == 0:
                         misseddays += 1
-                dayswithmoney = int(dayssofar)-misseddays
+                dayswithmoney = int(dayssofar) - misseddays
                 if response.status == 200:
                     # Then fetch the service fees
                     endpoint = (
@@ -290,8 +293,12 @@ class CheckwattManager:
                         fees = await response.json()
                         for each in fees["FCRD"]:
                             self.feesmonth += each["Revenue"]
-                        self.dailyaverage = ( int(self.revenuemonth) - int(self.feesmonth) ) / int(dayswithmoney)
-                        self.monthestimate = ( self.dailyaverage * daysleft ) + ( int(self.revenuemonth) - int(self.feesmonth) )
+                        self.dailyaverage = (
+                            int(self.revenuemonth) - int(self.feesmonth)
+                        ) / int(dayswithmoney)
+                        self.monthestimate = (self.dailyaverage * daysleft) + (
+                            int(self.revenuemonth) - int(self.feesmonth)
+                        )
                         if response.status == 200:
                             return True
 
@@ -329,7 +336,7 @@ class CheckwattManager:
                 if response.status == 200:
                     # Then fetch the service fees
                     endpoint = (
-                        f"/ems/service/fees?fromDate={year_date}&toDate={to_date}"
+                        f"/ems/service/fees?fromDate={from_date}&toDate={to_date}"
                     )
                     async with self.session.get(
                         self.base_url + endpoint, headers=headers
@@ -350,15 +357,16 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_fcrd_revenueyear(self):
+        """Fetch FCR-D revenues from CheckWatt."""
         yesterday_date = datetime.now()
         yesterday_date = yesterday_date.strftime("-%m-%d")
-        months = ["-01-01","-06-30","-07-01",yesterday_date]
+        months = ["-01-01", "-06-30", "-07-01", yesterday_date]
         loop = 0
-        """Fetch FCR-D revenues from CheckWatt."""
+        retval = False
         try:
             while loop < 3:
                 year_date = datetime.now().strftime("%Y")
-                to_date = year_date + months[loop+1]
+                to_date = year_date + months[loop + 1]
                 from_date = year_date + months[loop]
 
                 endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
@@ -379,7 +387,9 @@ class CheckwattManager:
                         self.revenueyeartotal += each["Revenue"]
                     if responseyear.status == 200:
                         # Then fetch the service fees
-                        endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")
+                        endpoint = (
+                            f"/ems/service/fees?fromDate={from_date}&toDate={to_date}"
+                        )
                         async with self.session.get(
                             self.base_url + endpoint, headers=headers
                         ) as responseyear:
@@ -389,28 +399,32 @@ class CheckwattManager:
                                 self.feesyeartotal += each["Revenue"]
                             if responseyear.status == 200:
                                 loop += 2
+                                retval = True
                             else:
+                                _LOGGER.error(
+                                    "Obtaining data from URL %s failed with status code %d",
+                                    self.base_url + endpoint,
+                                    responseyear.status,
+                                )
                                 break
                     else:
+                        _LOGGER.error(
+                            "Obtaining data from URL %s failed with status code %d",
+                            self.base_url + endpoint,
+                            responseyear.status,
+                        )
                         break
-            return True
-
-            _LOGGER.error(
-                "Obtaining data from URL %s failed with status code %d",
-                self.base_url + endpoint,
-                responseyear.status,
-            )
-            return False
+            return retval
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
-
-
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
         to_date = end_date.strftime("%Y")
-        endpoint = (f"/datagrouping/series?grouping={grouping}&fromdate=1923&todate={to_date}")
+        endpoint = (
+            f"/datagrouping/series?grouping={grouping}&fromdate=1923&todate={to_date}"
+        )
 
         meters = self.customer_details.get("Meter", [])
         if meters:
@@ -542,7 +556,7 @@ class CheckwattManager:
             resp += f" ({self.battery_registration['BatteryPowerKW']}kW, {self.battery_registration['BatteryCapacityKWh']}kWh)"
             return resp
         else:
-            return("Could not get any information about your battery")
+            return "Could not get any information about your battery"
 
     @property
     def electricity_provider(self):
@@ -601,8 +615,7 @@ class CheckwattManager:
         if self.monthestimate is not None:
             monthestimate = self.monthestimate
 
-
-        return revenuemonth,feesmonth, dailyaverage, monthestimate
+        return revenuemonth, feesmonth, dailyaverage, monthestimate
 
     @property
     def today_revenue(self):
