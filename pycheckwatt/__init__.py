@@ -11,6 +11,7 @@ from aiohttp import ClientError, ClientResponseError, ClientSession
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class CheckwattManager:
     """Checkwatt manager."""
 
@@ -77,7 +78,9 @@ class CheckwattManager:
         """Pull the registred information from the logbook."""
 
         # Define the pattern to match the content between the tags
-        pattern = re.compile(r"#BEGIN_BATTERY_REGISTRATION(.*?)#END_BATTERY_REGISTRATION", re.DOTALL)
+        pattern = re.compile(
+            r"#BEGIN_BATTERY_REGISTRATION(.*?)#END_BATTERY_REGISTRATION", re.DOTALL
+        )
 
         # Find all matches in the input string
         matches = re.findall(pattern, input_string)
@@ -95,20 +98,31 @@ class CheckwattManager:
         logbook_entries = [
             entry.strip()
             for entry in logbook_entries
-            if not ("#BEGIN_BATTERY_REGISTRATION" in entry or "#END_BATTERY_REGISTRATION" in entry)
+            if not (
+                "#BEGIN_BATTERY_REGISTRATION" in entry
+                or "#END_BATTERY_REGISTRATION" in entry
+            )
         ]
 
         return battery_registration, logbook_entries
 
     def _extract_fcr_d_state(self):
-        pattern = re.compile(r"\[ FCR-D (ACTIVATED|DEACTIVATE) \].*?(\d+,\d+/\d+,\d+/\d+,\d+ %).*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+        pattern = re.compile(
+            r"\[ FCR-D (ACTIVATED|DEACTIVATE) \].*?(\d+,\d+/\d+,\d+/\d+,\d+ %).*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
+        )
         for entry in self.logbook_entries:
             match = pattern.search(entry)
             if match:
-                self.fcrd_state = match.group(1)  # FCR-D state: ACTIVATED or DEACTIVATED
-                self.fcrd_percentage = match.group(2)  # Percentage, e.g., "99,0/2,9/97,7 %"
-                self.fcrd_timestamp = match.group(3) if match else None  # Timestamp, e.g., "2023-12-20 00:11:45"
-            break # stop so we get the first row in logbook, which is the latest information
+                self.fcrd_state = match.group(
+                    1
+                )  # FCR-D state: ACTIVATED or DEACTIVATED
+                self.fcrd_percentage = match.group(
+                    2
+                )  # Percentage, e.g., "99,0/2,9/97,7 %"
+                self.fcrd_timestamp = (
+                    match.group(3) if match else None
+                )  # Timestamp, e.g., "2023-12-20 00:11:45"
+            break  # stop so we get the first row in logbook
 
     async def handle_client_error(self, endpoint, headers, error):
         """Handle ClientError and log relevant information."""
@@ -124,7 +138,9 @@ class CheckwattManager:
         """Login to Checkwatt."""
         try:
             credentials = f"{self.username}:{self.password}"
-            encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode("utf-8")
+            encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
+                "utf-8"
+            )
             endpoint = "/user/LoginEiB?audience=eib"
 
             # Define headers with the encoded credentials
@@ -143,7 +159,9 @@ class CheckwattManager:
                     return True
 
                 if response.status == 401:
-                    _LOGGER.error("Unauthorized: Check your checkwatt authentication credentials")
+                    _LOGGER.error(
+                        "Unauthorized: Check your checkwatt authentication credentials"
+                    )
                     return False
 
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
@@ -172,9 +190,31 @@ class CheckwattManager:
 
                     meters = self.customer_details.get("Meter", [])
                     if meters:
-                        soc_meter = next((meter for meter in meters if meter.get("InstallationType") == "SoC"), None,)
-                        charging_meter = next((meter for meter in meters if meter.get("InstallationType") == "Charging"), None,)
-                        discharging_meter = next((meter for meter in meters if meter.get("InstallationType") == "Discharging"), None,)
+                        soc_meter = next(
+                            (
+                                meter
+                                for meter in meters
+                                if meter.get("InstallationType") == "SoC"
+                            ),
+                            None,
+                        )
+                        charging_meter = next(
+                            (
+                                meter
+                                for meter in meters
+                                if meter.get("InstallationType") == "Charging"
+                            ),
+                            None,
+                        )
+                        discharging_meter = next(
+                            (
+                                meter
+                                for meter in meters
+                                if meter.get("InstallationType") == "Discharging"
+                            ),
+                            None,
+                        )
+
                         if not soc_meter:
                             _LOGGER.error("No SoC meter found")
                             return False
@@ -182,7 +222,10 @@ class CheckwattManager:
                         battery_charge_peak = charging_meter.get("PeakAcKw")
                         battery_discharge_peak = discharging_meter.get("PeakAcKw")
                         if logbook:
-                            (self.battery_registration, self.logbook_entries) = self._extract_content_and_logbook(logbook)
+                            (
+                                self.battery_registration,
+                                self.logbook_entries,
+                            ) = self._extract_content_and_logbook(logbook)
                             self.battery_charge_peak = battery_charge_peak
                             self.battery_discharge_peak = battery_discharge_peak
                             self._extract_fcr_d_state()
@@ -237,7 +280,9 @@ class CheckwattManager:
                 dayswithmoney = int(dayssofar)-misseddays
                 if response.status == 200:
                     # Then fetch the service fees
-                    endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")
+                    endpoint = (
+                        f"/ems/service/fees?fromDate={from_date}&toDate={to_date}"
+                    )
                     async with self.session.get(
                         self.base_url + endpoint, headers=headers
                     ) as response:
@@ -259,7 +304,6 @@ class CheckwattManager:
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
-
 
     async def get_fcrd_revenue(self):
         """Fetch FCR-D revenues from checkwatt."""
@@ -284,7 +328,9 @@ class CheckwattManager:
                 self.revenue = await response.json()
                 if response.status == 200:
                     # Then fetch the service fees
-                    endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")
+                    endpoint = (
+                        f"/ems/service/fees?fromDate={year_date}&toDate={to_date}"
+                    )
                     async with self.session.get(
                         self.base_url + endpoint, headers=headers
                     ) as response:
@@ -302,9 +348,6 @@ class CheckwattManager:
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
-
-
-
 
     async def get_fcrd_revenueyear(self):
         yesterday_date = datetime.now()
@@ -382,7 +425,9 @@ class CheckwattManager:
         """Fetch Power Data from checkwatt."""
 
         try:
-            endpoint = self._build_series_endpoint(3)  # 0: Hourly, 1: Daily, 2: Monthly, 3: Yearly
+            endpoint = self._build_series_endpoint(
+                3
+            )  # 0: Hourly, 1: Daily, 2: Monthly, 3: Yearly
 
             # Define headers with the JwtToken
             headers = {
@@ -477,7 +522,10 @@ class CheckwattManager:
     @property
     def inverter_make_and_model(self):
         """Property for inverter make and model. Not used by HA integration.."""
-        if ("Inverter" in self.battery_registration and "InverterModel" in self.battery_registration):
+        if (
+            "Inverter" in self.battery_registration
+            and "InverterModel" in self.battery_registration
+        ):
             resp = f"{self.battery_registration['Inverter']}"
             resp += f" {self.battery_registration['InverterModel']}"
             return resp
@@ -485,7 +533,10 @@ class CheckwattManager:
     @property
     def battery_make_and_model(self):
         """Property for battery make and model. Not used by HA integration."""
-        if ("BatteryModel" in self.battery_registration and "BatterySystem" in self.battery_registration ):
+        if (
+            "BatteryModel" in self.battery_registration
+            and "BatterySystem" in self.battery_registration
+        ):
             resp = f"{self.battery_registration['BatterySystem']}"
             resp += f" {self.battery_registration['BatteryModel']}"
             resp += f" ({self.battery_registration['BatteryPowerKW']}kW, {self.battery_registration['BatteryCapacityKWh']}kWh)"
@@ -496,10 +547,13 @@ class CheckwattManager:
     @property
     def electricity_provider(self):
         """Property for electricity provides. Not used by HA integration."""
-        if ("ElectricityCompany" in self.battery_registration and "Dso" in self.battery_registration):
+        if (
+            "ElectricityCompany" in self.battery_registration
+            and "Dso" in self.battery_registration
+        ):
             resp = f"{self.battery_registration['ElectricityCompany']}"
             resp += f" via {self.battery_registration['Dso']}"
-        if ("GridAreaId" in self.battery_registration):
+        if "GridAreaId" in self.battery_registration:
             resp += f" ({self.battery_registration['GridAreaId']} {self.battery_registration['Kommun']})"
         return resp
 
@@ -526,7 +580,7 @@ class CheckwattManager:
         if self.feesyeartotal is not None:
             feesyear = self.feesyeartotal
 
-        return revenueyear,feesyear
+        return revenueyear, feesyear
 
     @property
     def month_revenue(self):
@@ -567,7 +621,7 @@ class CheckwattManager:
                     if "Revenue" in self.fees["FCRD"][0]:
                         fees = self.fees["FCRD"][0]["Revenue"]
 
-        return revenue,fees
+        return revenue, fees
 
     @property
     def tomorrow_revenue(self):
@@ -586,7 +640,7 @@ class CheckwattManager:
                     if "Revenue" in self.fees["FCRD"][1]:
                         fees = self.fees["FCRD"][1]["Revenue"]
 
-        return revenue,fees
+        return revenue, fees
 
     def _get_meter_total(self, meter_type):
         """Solar, Charging, Discharging, EDIEL_E17, EDIEL_E18, Soc meter summary."""
@@ -597,7 +651,7 @@ class CheckwattManager:
                 if meter["InstallationType"] == meter_type:
                     for measurement in meter["Measurements"]:
                         if "Value" in measurement:
-                            meter_total += measurement["Value"] # to get answer to kWh
+                            meter_total += measurement["Value"]  # to get answer to kWh
         return meter_total
 
     @property
