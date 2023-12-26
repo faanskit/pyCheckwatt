@@ -2,7 +2,7 @@
 name = "pycheckwatt"
 version = "0.1.0"
 description = "Read data from CheckWatts EnergyInBalance WEB API"
-authors = ["Marcus Karlsson <marcus.karlsson@usa.net>, Anders Yderborg <anders.yderborg@gmail.com>, Daniel Nilsson <danielnilsson79@hotmail.com>"]
+authors = ["Marcus Karlsson <marcus.karlsson@usa.net>", "Anders Yderborg <anders.yderborg@gmail.com>", "Daniel Nilsson <danielnilsson79@hotmail.com>"]
 license = "MIT License"
 readme = "README.md"
 
