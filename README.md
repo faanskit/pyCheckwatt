@@ -1,4 +1,4 @@
-# Pycheckwatt
+# pyCheckwatt
 
 Python package for communicating with [CheckWatt](https://checkwatt.se/) [EnergyInBalance](https://energyinbalance.se/) targeted for  [Home Assistant](https://home-assistant.io) integration.
 
