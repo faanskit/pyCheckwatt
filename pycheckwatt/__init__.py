@@ -307,16 +307,18 @@ class CheckwattManager:
 
 
     async def get_fcrd_revenueyear(self):
-        month = ["-01-01","-06-30","-07-01","-12-31"]
+        yesterday_date = datetime.now()
+        yesterday_date = yesterday_date.strftime("-%m-%d")
+        months = ["-01-01","-06-30","-07-01",yesterday_date]
         loop = 0
-        """Fetch FCR-D revenues from checkwatt."""
+        """Fetch FCR-D revenues from CheckWatt."""
         try:
             while loop < 3:
                 year_date = datetime.now().strftime("%Y")
-                end_date = year_date + month[loop+1]
-                year_date = year_date + month[loop]
+                to_date = year_date + months[loop+1]
+                from_date = year_date + months[loop]
 
-                endpoint = f"/ems/fcrd/revenue?fromDate={year_date}&toDate={end_date}"
+                endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
 
                 # Define headers with the JwtToken
                 headers = {
@@ -334,7 +336,7 @@ class CheckwattManager:
                         self.revenueyeartotal += each["Revenue"]
                     if responseyear.status == 200:
                         # Then fetch the service fees
-                        endpoint = (f"/ems/service/fees?fromDate={year_date}&toDate={end_date}")
+                        endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")
                         async with self.session.get(
                             self.base_url + endpoint, headers=headers
                         ) as responseyear:
