@@ -4,6 +4,7 @@ import json
 import os
 
 from dotenv import load_dotenv
+
 from pycheckwatt import CheckwattManager
 
 load_dotenv()
