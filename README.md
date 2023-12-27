@@ -21,7 +21,7 @@ EIB_PASSWORD="eib_password"
 
 async def main():
     """Test function for pyCheckwatt."""
-    async with CheckwattManager(EIB_USE RNAME, EIB_PASSWORD) as cw_instance:
+    async with CheckwattManager(EIB_USERNAME, EIB_PASSWORD) as cw_instance:
         try:
             # Login to EnergyInBalance
             if await cw_instance.login():
