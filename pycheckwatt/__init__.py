@@ -1,13 +1,14 @@
 """Checkwatt module."""
 from __future__ import annotations
 
-from aiohttp import ClientError, ClientResponseError, ClientSession
 import base64
-from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
 import json
 import logging
 import re
+from datetime import datetime, timedelta
+
+from aiohttp import ClientError, ClientResponseError, ClientSession
+from dateutil.relativedelta import relativedelta
 
 
 _LOGGER = logging.getLogger(__name__)

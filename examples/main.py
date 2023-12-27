@@ -1,8 +1,9 @@
 """Testmodule for pyCheckwatt."""
 import argparse
-from dotenv import load_dotenv
 import json
 import os
+
+from dotenv import load_dotenv
 
 from pycheckwatt import CheckwattManager
 
