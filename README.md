@@ -10,7 +10,7 @@ The library is **experimental** and pulls basic info from [EnergyInBalance](http
 Use with care as it loads the servers of CheckWatt
 
 ## Example
-The following example will login to [EnergyInBalance](https://energyinbalance.se/) and reteive basic information. 
+The following example will login to [EnergyInBalance](https://energyinbalance.se/) and retrieve basic information. 
 
 Create a file called `example.py` that looks like this:
 ```python
@@ -28,7 +28,7 @@ async def main():
                 # Fetch customer detail
                 await cw_instance.get_customer_details()
                 print("System\n======")
-                print(cw_instance.registred_owner)
+                print(cw_instance.registered_owner)
                 print(cw_instance.battery_make_and_model)
                 print("\nFCR-D\n=====")
                 print(f"FCR-D State: {cw_instance.fcrd_state}")
@@ -62,7 +62,7 @@ Watch the output:
 ```
 System
 ======
-Firstname Lastname (Adress Zip City)
+First-name Last-name (Address Zip City)
 Solax power T30 12.0 (12.3kW, 12.0kWh)
 
 FCR-D
@@ -82,7 +82,7 @@ $ ./venv/Scripts/activate
 $ pip install pycheckwatt python-dotenv argparse
 ```
 
-Run the comprehensice test:
+Run the comprehensive test:
 ```
 $ python main.py
 ```
