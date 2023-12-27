@@ -1,4 +1,4 @@
-"""Testmodule for pyCheckwatt."""
+"""Test-module for pyCheckwatt."""
 import argparse
 import json
 import os
@@ -15,7 +15,7 @@ async def main(show_details=False):
     username = os.getenv("CHECKWATT_USERNAME")
     password = os.getenv("CHECKWATT_PASSWORD")
 
-    # Create the asynch class
+    # Create the async class
     async with CheckwattManager(username, password) as check_watt_instance:
         try:
             # Login to EnergyInBalance
@@ -25,7 +25,7 @@ async def main(show_details=False):
 
                 # Do a sample
                 print("Customer Details\n================")
-                print(check_watt_instance.registred_owner)
+                print(check_watt_instance.registered_owner)
 
                 print("\nSystem\n======")
                 print("Charge peak", check_watt_instance.battery_charge_peak)

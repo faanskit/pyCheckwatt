@@ -1,4 +1,4 @@
-"""Checkwatt module."""
+"""CheckWatt module."""
 from __future__ import annotations
 
 import base64
@@ -17,7 +17,7 @@ class CheckwattManager:
     """Checkwatt manager."""
 
     def __init__(self, username, password) -> None:
-        """Initialize the checkwatt manager."""
+        """Initialize the CheckWatt manager."""
         if username is None or password is None:
             raise ValueError("Username and password must be provided.")
         self.session = None
@@ -76,7 +76,7 @@ class CheckwattManager:
         }
 
     def _extract_content_and_logbook(self, input_string):
-        """Pull the registred information from the logbook."""
+        """Pull the registered information from the logbook."""
 
         # Define the pattern to match the content between the tags
         pattern = re.compile(
@@ -572,8 +572,8 @@ class CheckwattManager:
         return resp
 
     @property
-    def registred_owner(self):
-        """Property for registred owner. Not used by HA integration.."""
+    def registered_owner(self):
+        """Property for registered owner. Not used by HA integration.."""
         if "FirstName" in self.customer_details and "LastName" in self.customer_details:
             resp = f"{self.customer_details['FirstName']}"
             resp += f" {self.customer_details['LastName']}"
