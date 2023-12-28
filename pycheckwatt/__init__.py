@@ -47,7 +47,7 @@ class CheckwattManager:
         self.power_data = None
         self.price_zone = None
         self.spot_prices = None
-        self.firstcolor = None
+        self.energy_data = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -468,6 +468,38 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
+    async def get_energy_flow(self):
+        """Fetch Power Data from checkwatt."""
+
+        try:
+            endpoint = "/ems/energyflow"
+
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),  
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    self.energy_data = await response.json()
+                    return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
+
     async def get_price_zone(self):
         """Fetch Price Zone from checkwatt."""
 
@@ -702,3 +734,25 @@ class CheckwattManager:
 
         _LOGGER.warning("Unable to retrieve spot price for the current hour")
         return None
+
+
+    @property
+    def battery_power(self):
+        """Property for Battery Power."""
+        if self.energy_data is not None:
+            if "BatteryNow" in self.energy_data:
+                return self.energy_data["BatteryNow"]
+
+        _LOGGER.warning("Unable to retrieve Battery Power")
+        return None
+    @property
+    def battery_soc(self):
+        """Property for Battery SoC."""
+        if self.energy_data is not None:
+            if "BatterySoC" in self.energy_data:
+                return self.energy_data["BatterySoC"]
+
+        _LOGGER.warning("Unable to retrieve Battery SoC")
+        return None
+
+
