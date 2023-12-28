@@ -469,7 +469,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_energy_flow(self):
-        """Fetch Power Data from checkwatt."""
+        """Fetch Power Data from CheckWatt."""
 
         try:
             endpoint = "/ems/energyflow"
@@ -480,7 +480,7 @@ class CheckwattManager:
                 "authorization": f"Bearer {self.jwt_token}",
             }
 
-            # First fetch the revenue
+            # Fetch Energy Flows
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
             ) as response:
