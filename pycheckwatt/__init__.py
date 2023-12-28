@@ -745,6 +745,7 @@ class CheckwattManager:
 
         _LOGGER.warning("Unable to retrieve Battery Power")
         return None
+
     @property
     def battery_soc(self):
         """Property for Battery SoC."""
