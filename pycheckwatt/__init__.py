@@ -14,7 +14,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class CheckwattManager:
-    """Checkwatt manager."""
+    """CheckWatt manager."""
 
     def __init__(self, username, password) -> None:
         """Initialize the CheckWatt manager."""
@@ -136,7 +136,7 @@ class CheckwattManager:
         return False
 
     async def login(self):
-        """Login to Checkwatt."""
+        """Login to CheckWatt."""
         try:
             credentials = f"{self.username}:{self.password}"
             encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
@@ -172,7 +172,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_customer_details(self):
-        """Fetch customer details from Checkwatt."""
+        """Fetch customer details from CheckWatt."""
         try:
             endpoint = "/controlpanel/CustomerDetail"
 
@@ -564,6 +564,42 @@ class CheckwattManager:
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
+
+
+    async def get_energy_trading_company(self, input_id):
+        """Translate Energy Company Id to Energy Company Name."""
+        try:
+            endpoint = "/controlpanel/elhandelsbolag"
+
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+            }
+
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    energy_trading_companies = await response.json()
+                    for energy_trading_company in energy_trading_companies:
+                        if energy_trading_company['Id'] == input_id:
+                            return energy_trading_company['DisplayName']
+
+
+                    return None
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return None
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
+
 
     @property
     def inverter_make_and_model(self):
