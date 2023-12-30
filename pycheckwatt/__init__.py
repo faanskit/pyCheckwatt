@@ -14,7 +14,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class CheckwattManager:
-    """Checkwatt manager."""
+    """CheckWatt manager."""
 
     def __init__(self, username, password) -> None:
         """Initialize the CheckWatt manager."""
@@ -136,7 +136,7 @@ class CheckwattManager:
         return False
 
     async def login(self):
-        """Login to Checkwatt."""
+        """Login to CheckWatt."""
         try:
             credentials = f"{self.username}:{self.password}"
             encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
@@ -172,7 +172,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_customer_details(self):
-        """Fetch customer details from Checkwatt."""
+        """Fetch customer details from CheckWatt."""
         try:
             endpoint = "/controlpanel/CustomerDetail"
 
@@ -567,7 +567,7 @@ class CheckwattManager:
 
 
     async def get_energy_trading_company(self, input_id):
-        """Fetch customer details from Checkwatt."""
+        """Translate Energy Company Id to Energy Company Name."""
         try:
             endpoint = "/controlpanel/elhandelsbolag"
 
