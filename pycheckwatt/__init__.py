@@ -386,7 +386,6 @@ class CheckwattManager:
                             for each in self.feesyear["FCRD"]:
                                 self.feesyeartotal += each["Revenue"]
                             if responseyear.status == 200:
-                                loop += 2
                                 retval = True
                             else:
                                 _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
@@ -398,7 +397,7 @@ class CheckwattManager:
                 return await self.handle_client_error(endpoint, headers, error)
         else:
             try:
-                while loop < 2:
+                while loop < 3:
                     year_date = datetime.now().strftime("%Y")
                     to_date = year_date + months[loop+1]
                     from_date = year_date +  months[loop]
@@ -426,7 +425,7 @@ class CheckwattManager:
                                     _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
                         else:
                             _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
-                    return retval
+                return retval
 
             except (ClientResponseError, ClientError) as error:
                 return await self.handle_client_error(endpoint, headers, error)
@@ -488,7 +487,7 @@ class CheckwattManager:
 
             # Define headers with the JwtToken
             headers = {
-                **self._get_headers(),  
+                **self._get_headers(),
                 "authorization": f"Bearer {self.jwt_token}",
             }
 
@@ -823,5 +822,4 @@ class CheckwattManager:
 
         _LOGGER.warning("Unable to retrieve Battery SoC")
         return None
-
 
