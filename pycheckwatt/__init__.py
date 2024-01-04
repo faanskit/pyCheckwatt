@@ -783,6 +783,26 @@ class CheckwattManager:
         return None
 
     @property
+    def grid_power(self):
+        """Property for Grid Power."""
+        if self.energy_data is not None:
+            if "GridNow" in self.energy_data:
+                return self.energy_data["GridNow"]
+
+        _LOGGER.warning("Unable to retrieve Grid Power")
+        return None
+
+    @property
+    def solar_power(self):
+        """Property for Solar Power."""
+        if self.energy_data is not None:
+            if "SolarNow" in self.energy_data:
+                return self.energy_data["SolarNow"]
+
+        _LOGGER.warning("Unable to retrieve Solar Power")
+        return None
+
+    @property
     def battery_soc(self):
         """Property for Battery SoC."""
         if self.energy_data is not None:

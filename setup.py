@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 
 MIN_PY_VERSION = "3.10"
 PACKAGES = find_packages()
-VERSION = "0.1.0"
+VERSION = "0.1.7"
 
 setup(
     name="pycheckwatt",
