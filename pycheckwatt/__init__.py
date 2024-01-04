@@ -145,10 +145,7 @@ class CheckwattManager:
             endpoint = "/user/LoginEiB?audience=eib"
 
             # Define headers with the encoded credentials
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Basic {encoded_credentials}",
-            }
+            headers = {**self._get_headers(), "authorization": f"Basic {encoded_credentials}"}
 
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -160,9 +157,7 @@ class CheckwattManager:
                     return True
 
                 if response.status == 401:
-                    _LOGGER.error(
-                        "Unauthorized: Check your checkwatt authentication credentials"
-                    )
+                    _LOGGER.error("Unauthorized: Check your checkwatt authentication credentials")
                     return False
 
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
@@ -177,14 +172,9 @@ class CheckwattManager:
             endpoint = "/controlpanel/CustomerDetail"
 
             # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
+            headers = {**self._get_headers(), "authorization": f"Bearer {self.jwt_token}"}
 
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
+            async with self.session.get(self.base_url + endpoint, headers=headers) as response:
                 response.raise_for_status()
                 if response.status == 200:
                     self.customer_details = await response.json()
