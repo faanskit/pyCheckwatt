@@ -145,10 +145,7 @@ class CheckwattManager:
             endpoint = "/user/LoginEiB?audience=eib"
 
             # Define headers with the encoded credentials
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Basic {encoded_credentials}",
-            }
+            headers = {**self._get_headers(), "authorization": f"Basic {encoded_credentials}"}
 
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -160,9 +157,7 @@ class CheckwattManager:
                     return True
 
                 if response.status == 401:
-                    _LOGGER.error(
-                        "Unauthorized: Check your checkwatt authentication credentials"
-                    )
+                    _LOGGER.error("Unauthorized: Check your checkwatt authentication credentials")
                     return False
 
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
@@ -177,14 +172,9 @@ class CheckwattManager:
             endpoint = "/controlpanel/CustomerDetail"
 
             # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
+            headers = {**self._get_headers(), "authorization": f"Bearer {self.jwt_token}"}
 
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
+            async with self.session.get(self.base_url + endpoint, headers=headers) as response:
                 response.raise_for_status()
                 if response.status == 200:
                     self.customer_details = await response.json()
@@ -363,61 +353,72 @@ class CheckwattManager:
         months = ["-01-01", "-06-30", "-07-01", yesterday_date]
         loop = 0
         retval = False
-        try:
-            while loop < 3:
+        if (yesterday_date <= "-07-01"):
+            try:
                 year_date = datetime.now().strftime("%Y")
-                to_date = year_date + months[loop + 1]
-                from_date = year_date + months[loop]
-
+                to_date = year_date + yesterday_date
+                from_date = year_date + "-01-01"
                 endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
-
                 # Define headers with the JwtToken
-                headers = {
-                    **self._get_headers(),
-                    "authorization": f"Bearer {self.jwt_token}",
-                }
-
+                headers = {**self._get_headers(),"authorization": f"Bearer {self.jwt_token}"}
                 # First fetch the revenue
-                async with self.session.get(
-                    self.base_url + endpoint, headers=headers
-                ) as responseyear:
+                async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:
                     responseyear.raise_for_status()
                     self.revenueyear = await responseyear.json()
                     for each in self.revenueyear:
                         self.revenueyeartotal += each["Revenue"]
                     if responseyear.status == 200:
                         # Then fetch the service fees
-                        endpoint = (
-                            f"/ems/service/fees?fromDate={from_date}&toDate={to_date}"
-                        )
-                        async with self.session.get(
-                            self.base_url + endpoint, headers=headers
-                        ) as responseyear:
+                        endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")
+                        async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:
                             responseyear.raise_for_status()
                             self.feesyear = await responseyear.json()
                             for each in self.feesyear["FCRD"]:
                                 self.feesyeartotal += each["Revenue"]
                             if responseyear.status == 200:
-                                loop += 2
                                 retval = True
                             else:
-                                _LOGGER.error(
-                                    "Obtaining data from URL %s failed with status code %d",
-                                    self.base_url + endpoint,
-                                    responseyear.status,
-                                )
-                                break
+                                _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
                     else:
-                        _LOGGER.error(
-                            "Obtaining data from URL %s failed with status code %d",
-                            self.base_url + endpoint,
-                            responseyear.status,
-                        )
-                        break
-            return retval
+                        _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
+                return retval
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
+            except (ClientResponseError, ClientError) as error:
+                return await self.handle_client_error(endpoint, headers, error)
+        else:
+            try:
+                while loop < 3:
+                    year_date = datetime.now().strftime("%Y")
+                    to_date = year_date + months[loop+1]
+                    from_date = year_date +  months[loop]
+                    endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
+                    # Define headers with the JwtToken
+                    headers = {**self._get_headers(),"authorization": f"Bearer {self.jwt_token}"}
+                    # First fetch the revenue
+                    async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:
+                        responseyear.raise_for_status()
+                        self.revenueyear = await responseyear.json()
+                        for each in self.revenueyear:
+                            self.revenueyeartotal += each["Revenue"]
+                        if responseyear.status == 200:
+                            # Then fetch the service fees
+                            endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")
+                            async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:
+                                responseyear.raise_for_status()
+                                self.feesyear = await responseyear.json()
+                                for each in self.feesyear["FCRD"]:
+                                    self.feesyeartotal += each["Revenue"]
+                                if responseyear.status == 200:
+                                    loop += 2
+                                    retval = True
+                                else:
+                                    _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
+                        else:
+                            _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
+                return retval
+
+            except (ClientResponseError, ClientError) as error:
+                return await self.handle_client_error(endpoint, headers, error)
 
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
@@ -476,7 +477,7 @@ class CheckwattManager:
 
             # Define headers with the JwtToken
             headers = {
-                **self._get_headers(),  
+                **self._get_headers(),
                 "authorization": f"Bearer {self.jwt_token}",
             }
 
@@ -811,5 +812,4 @@ class CheckwattManager:
 
         _LOGGER.warning("Unable to retrieve Battery SoC")
         return None
-
 
