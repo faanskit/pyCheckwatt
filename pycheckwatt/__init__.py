@@ -66,7 +66,7 @@ class CheckwattManager:
             "accept": "application/json, text/plain, */*",
             "accept-language": "sv-SE,sv;q=0.9,en-SE;q=0.8,en;q=0.7,en-US;q=0.6",
             "content-type": "application/json",
-            "sec-ch-ua": '"Chromium";v="112", "Google Chrome";v="112", "Not:A-Brand";v="99"',
+            "sec-ch-ua": '"Chromium";v="112", "Google Chrome";v="112", "Not:A-Brand";v="99"',  # noqa: E501
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
             "sec-fetch-dest": "empty",
@@ -97,7 +97,8 @@ class CheckwattManager:
         # Extract logbook entries
         logbook_entries = input_string.split("\n")
 
-        # Filter out entries containing #BEGIN_BATTERY_REGISTRATION and #END_BATTERY_REGISTRATION
+        # Filter out entries containing
+        # #BEGIN_BATTERY_REGISTRATION and #END_BATTERY_REGISTRATION
         logbook_entries = [
             entry.strip()
             for entry in logbook_entries
@@ -111,7 +112,7 @@ class CheckwattManager:
 
     def _extract_fcr_d_state(self):
         pattern = re.compile(
-            r"\[ FCR-D (ACTIVATED|DEACTIVATE) \].*?(\d+,\d+/\d+,\d+/\d+,\d+ %).*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
+            r"\[ FCR-D (ACTIVATED|DEACTIVATE) \].*?(\d+,\d+/\d+,\d+/\d+,\d+ %).*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"  # noqa: E501
         )
         for entry in self.logbook_entries:
             match = pattern.search(entry)
@@ -145,20 +146,26 @@ class CheckwattManager:
             async with self.session.get(
                 url, headers=headers
             ) as response:
-                data = await response.text()  # Use text() to get the response content as a string
+                data = await response.text()
                 if response.status == 200:
                     kill = data.strip()  # Remove leading and trailing whitespaces
                     if kill == "0":
                         # We are OK to continue
-                        _LOGGER.debug("CheckWatt accepted and not enabled the kill-switch")
+                        _LOGGER.debug(
+                            "CheckWatt accepted and not enabled the kill-switch"
+                            )
                         return True
 
                     # Kill was requested
-                    _LOGGER.error("CheckWatt has requested to back down by enabling the kill-switch")
+                    _LOGGER.error(
+                        "CheckWatt has requested to back down by enabling the kill-switch"  # noqa: E501
+                        )
                     return False
 
                 if response.status == 401:
-                    _LOGGER.error("Unauthorized: Check your CheckWatt authentication credentials")
+                    _LOGGER.error(
+                        "Unauthorized: Check your CheckWatt authentication credentials"
+                        )
                     return False
 
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
@@ -182,7 +189,8 @@ class CheckwattManager:
             endpoint = "/user/LoginEiB?audience=eib"
 
             # Define headers with the encoded credentials
-            headers = {**self._get_headers(), "authorization": f"Basic {encoded_credentials}"}
+            headers = {**self._get_headers(),
+                       "authorization": f"Basic {encoded_credentials}"}
 
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -194,7 +202,9 @@ class CheckwattManager:
                     return True
 
                 if response.status == 401:
-                    _LOGGER.error("Unauthorized: Check your checkwatt authentication credentials")
+                    _LOGGER.error(
+                        "Unauthorized: Check your checkwatt authentication credentials"
+                        )
                     return False
 
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
@@ -209,9 +219,10 @@ class CheckwattManager:
             endpoint = "/controlpanel/CustomerDetail"
 
             # Define headers with the JwtToken
-            headers = {**self._get_headers(), "authorization": f"Bearer {self.jwt_token}"}
+            headers = {**self._get_headers(),
+                       "authorization": f"Bearer {self.jwt_token}"}
 
-            async with self.session.get(self.base_url + endpoint, headers=headers) as response:
+            async with self.session.get(self.base_url + endpoint, headers=headers) as response:   # noqa: E501
                 response.raise_for_status()
                 if response.status == 200:
                     self.customer_details = await response.json()
@@ -397,17 +408,18 @@ class CheckwattManager:
                 from_date = year_date + "-01-01"
                 endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
                 # Define headers with the JwtToken
-                headers = {**self._get_headers(),"authorization": f"Bearer {self.jwt_token}"}
+                headers = {**self._get_headers(),
+                           "authorization": f"Bearer {self.jwt_token}"}
                 # First fetch the revenue
-                async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:
+                async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:   # noqa: E501
                     responseyear.raise_for_status()
                     self.revenueyear = await responseyear.json()
                     for each in self.revenueyear:
                         self.revenueyeartotal += each["Revenue"]
                     if responseyear.status == 200:
                         # Then fetch the service fees
-                        endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")
-                        async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:
+                        endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")   # noqa: E501
+                        async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:   # noqa: E501
                             responseyear.raise_for_status()
                             self.feesyear = await responseyear.json()
                             for each in self.feesyear["FCRD"]:
@@ -415,9 +427,15 @@ class CheckwattManager:
                             if responseyear.status == 200:
                                 retval = True
                             else:
-                                _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
+                                _LOGGER.error(
+                                    "Obtaining data from URL %s failed with status code %d",   # noqa: E501
+                                    self.base_url + endpoint, responseyear.status
+                                    )
                     else:
-                        _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
+                        _LOGGER.error(
+                            "Obtaining data from URL %s failed with status code %d",
+                            self.base_url + endpoint, responseyear.status
+                            )
                 return retval
 
             except (ClientResponseError, ClientError) as error:
@@ -427,20 +445,21 @@ class CheckwattManager:
                 while loop < 3:
                     year_date = datetime.now().strftime("%Y")
                     to_date = year_date + months[loop+1]
-                    from_date = year_date +  months[loop]
-                    endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
+                    from_date = year_date + months[loop]
+                    endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"  # noqa: E501
                     # Define headers with the JwtToken
-                    headers = {**self._get_headers(),"authorization": f"Bearer {self.jwt_token}"}
+                    headers = {**self._get_headers(),
+                               "authorization": f"Bearer {self.jwt_token}"}
                     # First fetch the revenue
-                    async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:
+                    async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:   # noqa: E501
                         responseyear.raise_for_status()
                         self.revenueyear = await responseyear.json()
                         for each in self.revenueyear:
                             self.revenueyeartotal += each["Revenue"]
                         if responseyear.status == 200:
                             # Then fetch the service fees
-                            endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")
-                            async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:
+                            endpoint = (f"/ems/service/fees?fromDate={from_date}&toDate={to_date}")  # noqa: E501
+                            async with self.session.get(self.base_url + endpoint, headers=headers) as responseyear:  # noqa: E501
                                 responseyear.raise_for_status()
                                 self.feesyear = await responseyear.json()
                                 for each in self.feesyear["FCRD"]:
@@ -449,9 +468,13 @@ class CheckwattManager:
                                     loop += 2
                                     retval = True
                                 else:
-                                    _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
+                                    _LOGGER.error(
+                                        "Obtaining data from URL %s failed with status code %d",  # noqa: E501
+                                        self.base_url + endpoint, responseyear.status)
                         else:
-                            _LOGGER.error("Obtaining data from URL %s failed with status code %d", self.base_url + endpoint, responseyear.status)
+                            _LOGGER.error("Obtaining data from URL %s failed with status code %d",  # noqa: E501
+                                          self.base_url + endpoint, responseyear.status
+                                          )
                 return retval
 
             except (ClientResponseError, ClientError) as error:
@@ -537,7 +560,6 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
-
     async def get_price_zone(self):
         """Fetch Price Zone from checkwatt."""
 
@@ -577,7 +599,7 @@ class CheckwattManager:
             to_date = end_date.strftime("%Y-%m-%d")
             if self.price_zone is None:
                 await self.get_price_zone()
-            endpoint = f"/ems/spotprice?zone={self.price_zone}&fromDate={from_date}&toDate={to_date}"
+            endpoint = f"/ems/spotprice?zone={self.price_zone}&fromDate={from_date}&toDate={to_date}"  # noqa: E501
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
@@ -603,7 +625,6 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
-
     async def get_energy_trading_company(self, input_id):
         """Translate Energy Company Id to Energy Company Name."""
         try:
@@ -624,7 +645,6 @@ class CheckwattManager:
                         if energy_trading_company['Id'] == input_id:
                             return energy_trading_company['DisplayName']
 
-
                     return None
 
                 _LOGGER.error(
@@ -636,8 +656,6 @@ class CheckwattManager:
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
-
-
 
     @property
     def inverter_make_and_model(self):
@@ -659,7 +677,7 @@ class CheckwattManager:
         ):
             resp = f"{self.battery_registration['BatterySystem']}"
             resp += f" {self.battery_registration['BatteryModel']}"
-            resp += f" ({self.battery_registration['BatteryPowerKW']}kW, {self.battery_registration['BatteryCapacityKWh']}kWh)"
+            resp += f" ({self.battery_registration['BatteryPowerKW']}kW, {self.battery_registration['BatteryCapacityKWh']}kWh)"  # noqa: E501
             return resp
         else:
             return "Could not get any information about your battery"
@@ -674,7 +692,7 @@ class CheckwattManager:
             resp = f"{self.battery_registration['ElectricityCompany']}"
             resp += f" via {self.battery_registration['Dso']}"
         if "GridAreaId" in self.battery_registration:
-            resp += f" ({self.battery_registration['GridAreaId']} {self.battery_registration['Kommun']})"
+            resp += f" ({self.battery_registration['GridAreaId']} {self.battery_registration['Kommun']})"  # noqa: E501
         return resp
 
     @property
@@ -809,7 +827,6 @@ class CheckwattManager:
         _LOGGER.warning("Unable to retrieve spot price for the current hour")
         return None
 
-
     @property
     def battery_power(self):
         """Property for Battery Power."""
@@ -849,4 +866,3 @@ class CheckwattManager:
 
         _LOGGER.warning("Unable to retrieve Battery SoC")
         return None
-
