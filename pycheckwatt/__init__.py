@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 class CheckwattManager:
     """CheckWatt manager."""
 
-    def __init__(self, username, password) -> None:
+    def __init__(self, username, password, application="pyCheckwatt") -> None:
         """Initialize the CheckWatt manager."""
         if username is None or password is None:
             raise ValueError("Username and password must be provided.")
@@ -48,6 +48,7 @@ class CheckwattManager:
         self.price_zone = None
         self.spot_prices = None
         self.energy_data = None
+        self.header_identifier = application
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -73,6 +74,7 @@ class CheckwattManager:
             "sec-fetch-site": "cross-site",
             "wslog-os": "",
             "wslog-platform": "controlpanel",
+            "X-pyCheckwatt-Application": self.header_identifier,
         }
 
     def _extract_content_and_logbook(self, input_string):
@@ -135,9 +137,44 @@ class CheckwattManager:
         )
         return False
 
+    async def _continue_kill_switch_not_enabled(self):
+        """Check if CheckWatt has requested integrations to back-off."""
+        try:
+            url = "https://checkwatt.se/ha-killswitch.txt"
+            headers = {**self._get_headers()}
+            async with self.session.get(
+                url, headers=headers
+            ) as response:
+                data = await response.text()  # Use text() to get the response content as a string
+                if response.status == 200:
+                    kill = data.strip()  # Remove leading and trailing whitespaces
+                    if kill == "0":
+                        # We are OK to continue
+                        _LOGGER.debug("CheckWatt accepted and not enabled the kill-switch")
+                        return True
+
+                    # Kill was requested
+                    _LOGGER.error("CheckWatt has requested to back down by enabling the kill-switch")
+                    return False
+
+                if response.status == 401:
+                    _LOGGER.error("Unauthorized: Check your CheckWatt authentication credentials")
+                    return False
+
+                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(url, headers, error)
+
     async def login(self):
         """Login to CheckWatt."""
         try:
+            if not await self._continue_kill_switch_not_enabled():
+                # CheckWatt want us to back down.
+                return False
+            _LOGGER.debug("Kill-switch not enabled, continue")
+
             credentials = f"{self.username}:{self.password}"
             encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
                 "utf-8"
