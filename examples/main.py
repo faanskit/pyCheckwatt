@@ -18,10 +18,10 @@ async def main(show_details=False):
     # Create the async class
     async with CheckwattManager(username, password) as check_watt_instance:
         try:
-            # Login to EnergyInBalance
+            # Login to EnergyInBalance and check kill switch
             if await check_watt_instance.login():
                 # Fetch customer detail
-                customer_id = await check_watt_instance.get_customer_details()
+                await check_watt_instance.get_customer_details()
 
                 # Do a sample
                 print("Customer Details\n================")
@@ -155,7 +155,7 @@ async def main(show_details=False):
                 print(f"Solar: {check_watt_instance.total_solar_energy/1000} kWh")
                 print(f"Charging: {check_watt_instance.total_charging_energy/1000} kWh")
                 print(
-                    f"Discharging: {check_watt_instance.total_discharging_energy/1000} kWh"
+                    f"Discharging: {check_watt_instance.total_discharging_energy/1000} kWh"  # noqa: E501
                 )
                 print(f"Import: {check_watt_instance.total_import_energy/1000} kWh")
                 print(f"Export: {check_watt_instance.total_export_energy/1000} kWh")
