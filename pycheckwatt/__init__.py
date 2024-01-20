@@ -999,7 +999,7 @@ class CheckwattManager:
 
     @property
     def meter_status_date(self):
-        """Property for Meter Version."""
+        """Property for Meter Status Date."""
         if self.meter_data is not None:
             if "Date" in self.meter_data:
                 return self.meter_data["Date"]
@@ -1009,7 +1009,7 @@ class CheckwattManager:
 
     @property
     def meter_value_w(self):
-        """Property for Meter Version."""
+        """Property for Meter Value W."""
         if self.meter_data is not None:
             if "ValueW" in self.meter_data:
                 return self.meter_data["ValueW"]
