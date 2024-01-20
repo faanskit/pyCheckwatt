@@ -1018,11 +1018,25 @@ class CheckwattManager:
         return None
 
     @property
+    def meter_under_test(self):
+        """Property to check if meter is being tested."""
+        if self.meter_data and "Version" in self.meter_data:
+            return self.meter_data["Version"].endswith(".83")
+
+        _LOGGER.warning("Unable to find Meter Data")
+        return None
+
+    @property
     def meter_version(self):
         """Property for Meter Version."""
         if self.meter_data is not None:
             if "Version" in self.meter_data:
-                return self.meter_data["Version"]
+                version_string = self.meter_data["Version"]
+
+                # Use regular expression to extract Major.Minor.Patch
+                match = re.search(r"\d+\.\d+\.\d+", version_string)
+                if match:
+                    return match.group()
 
         _LOGGER.warning("Unable to find Meter Data")
         return None
