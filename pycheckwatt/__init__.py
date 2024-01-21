@@ -49,6 +49,8 @@ class CheckwattManager:
         self.spot_prices = None
         self.energy_data = None
         self.header_identifier = application
+        self.rpi_data = None
+        self.meter_data = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -679,6 +681,68 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
+    async def get_rpi_data(self, rpi_serial=None):
+        """Fetch RPi Data from CheckWatt."""
+
+        try:
+            if rpi_serial is None:
+                rpi_serial = self.rpi_serial
+
+            if rpi_serial is None:
+                _LOGGER.error("Invalid RpiSerial")
+                return False
+
+            endpoint = f"/register/checkrpiv2?rpi={rpi_serial}"
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint,
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    self.rpi_data = await response.json()
+                    return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, "", error)
+
+    async def get_meter_status(self, meter_id=None):
+        """Fetch RPi Data from CheckWatt."""
+
+        try:
+            if meter_id is None:
+                meter_id = self.meter_id
+
+            if meter_id is None:
+                _LOGGER.error("Invalid MeterId")
+                return False
+
+            endpoint = f"/asset/status?meterId={meter_id}"
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint,
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    self.meter_data = await response.json()
+                    return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, "", error)
+
     @property
     def inverter_make_and_model(self):
         """Property for inverter make and model. Not used by HA integration.."""
@@ -887,4 +951,104 @@ class CheckwattManager:
                 return self.energy_data["BatterySoC"]
 
         _LOGGER.warning("Unable to retrieve Battery SoC")
+        return None
+
+    @property
+    def rpi_serial(self):
+        """Property for Rpi Serial."""
+        if self.rpi_data is not None:
+            meters = self.rpi_data.get("Meters", [])
+            for meter in meters:
+                if "RPi" in meter:
+                    return meter["RPi"].upper()
+
+        if self.customer_details is not None:
+            meters = self.customer_details.get("Meter", [])
+            for meter in meters:
+                if "RpiSerial" in meter:
+                    return meter["RpiSerial"].upper()
+
+        _LOGGER.warning("Unable to find RPi Serial")
+        return None
+
+    @property
+    def meter_id(self):
+        """Property for Meter Id."""
+        if self.rpi_data is not None:
+            meters = self.rpi_data.get("Meters", [])
+            for meter in meters:
+                if "Id" in meter:
+                    return meter["Id"]
+
+        if self.customer_details is not None:
+            meters = self.customer_details.get("Meter", [])
+            for meter in meters:
+                if "InstallationType" in meter and "Id" in meter:
+                    if meter["InstallationType"] == "SoC":
+                        return meter["Id"]
+
+        _LOGGER.warning("Unable to find Meter Id")
+        return None
+
+    @property
+    def meter_status(self):
+        """Property for Meter Status."""
+        # First check if meter_data is available
+        if self.meter_data is not None:
+            if "Label" in self.meter_data:
+                return self.meter_data["Label"]
+
+        # Then check if rpi_data is available
+        if self.rpi_data is not None:
+            meters = self.rpi_data.get("Meters", [])
+            for meter in meters:
+                if "InstallationType" in meter and "Status" in meter:
+                    if meter["InstallationType"] == "SoC":
+                        return meter["Status"]
+
+        _LOGGER.warning("Unable to find Meter Status")
+        return None
+
+    @property
+    def meter_status_date(self):
+        """Property for Meter Status Date."""
+        if self.meter_data is not None:
+            if "Date" in self.meter_data:
+                return self.meter_data["Date"]
+
+        _LOGGER.warning("Unable to find Meter Data for Status Date")
+        return None
+
+    @property
+    def meter_value_w(self):
+        """Property for Meter Value W."""
+        if self.meter_data is not None:
+            if "ValueW" in self.meter_data:
+                return self.meter_data["ValueW"]
+
+        _LOGGER.warning("Unable to find Meter Data for Value W")
+        return None
+
+    @property
+    def meter_under_test(self):
+        """Property to check if meter is being tested."""
+        if self.meter_data and "Version" in self.meter_data:
+            return self.meter_data["Version"].endswith(".83")
+
+        _LOGGER.warning("Unable to find Meter Data for Meter Under Test")
+        return None
+
+    @property
+    def meter_version(self):
+        """Property for Meter Version."""
+        if self.meter_data is not None:
+            if "Version" in self.meter_data:
+                version_string = self.meter_data["Version"]
+
+                # Use regular expression to extract Major.Minor.Patch
+                match = re.search(r"\d+\.\d+\.\d+", version_string)
+                if match:
+                    return match.group()
+
+        _LOGGER.warning("Unable to find Meter Data for Meter Version")
         return None
