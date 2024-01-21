@@ -956,6 +956,12 @@ class CheckwattManager:
     @property
     def rpi_serial(self):
         """Property for Rpi Serial."""
+        if self.rpi_data is not None:
+            meters = self.rpi_data.get("Meters", [])
+            for meter in meters:
+                if "RPi" in meter:
+                    return meter["RPi"].upper()
+
         if self.customer_details is not None:
             meters = self.customer_details.get("Meter", [])
             for meter in meters:
@@ -968,6 +974,12 @@ class CheckwattManager:
     @property
     def meter_id(self):
         """Property for Meter Id."""
+        if self.rpi_data is not None:
+            meters = self.rpi_data.get("Meters", [])
+            for meter in meters:
+                if "Id" in meter:
+                    return meter["Id"]
+
         if self.customer_details is not None:
             meters = self.customer_details.get("Meter", [])
             for meter in meters:
@@ -1004,7 +1016,7 @@ class CheckwattManager:
             if "Date" in self.meter_data:
                 return self.meter_data["Date"]
 
-        _LOGGER.warning("Unable to find Meter Data")
+        _LOGGER.warning("Unable to find Meter Data for Status Date")
         return None
 
     @property
@@ -1014,7 +1026,7 @@ class CheckwattManager:
             if "ValueW" in self.meter_data:
                 return self.meter_data["ValueW"]
 
-        _LOGGER.warning("Unable to find Meter Data")
+        _LOGGER.warning("Unable to find Meter Data for Value W")
         return None
 
     @property
@@ -1023,7 +1035,7 @@ class CheckwattManager:
         if self.meter_data and "Version" in self.meter_data:
             return self.meter_data["Version"].endswith(".83")
 
-        _LOGGER.warning("Unable to find Meter Data")
+        _LOGGER.warning("Unable to find Meter Data for Meter Under Test")
         return None
 
     @property
@@ -1038,5 +1050,5 @@ class CheckwattManager:
                 if match:
                     return match.group()
 
-        _LOGGER.warning("Unable to find Meter Data")
+        _LOGGER.warning("Unable to find Meter Data for Meter Version")
         return None
