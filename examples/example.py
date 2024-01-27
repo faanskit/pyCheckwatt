@@ -90,7 +90,7 @@ async def main(show_details=False):
                 print(f"Solar: {check_watt_instance.total_solar_energy/1000} kWh")
                 print(f"Charging: {check_watt_instance.total_charging_energy/1000} kWh")
                 print(
-                    f"Discharging: {check_watt_instance.total_discharging_energy/1000} kWh"
+                    f"Discharging: {check_watt_instance.total_discharging_energy/1000} kWh"  # noqa: E501
                 )
                 print(f"Import: {check_watt_instance.total_import_energy/1000} kWh")
                 print(f"Export: {check_watt_instance.total_export_energy/1000} kWh")
