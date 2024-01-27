@@ -873,16 +873,16 @@ class CheckwattManager:
 
         return revenue
 
-    #    @property
-    #    def tomorrow_revenue(self):
-    #        """Property for tomorrow's revenue."""
-    #        revenue = 0
-    #        if self.revenue is not None:
-    #            if len(self.revenue) > 1:
-    #                if "NetRevenue" in self.revenue[1]:
-    #                    revenue = self.revenue[1]["NetRevenue"]
+    @property
+    def fcrd_tomorrow_net_revenue(self):
+        """Property for tomorrow's revenue."""
+        revenue = 0
+        if self.revenue is not None:
+            if len(self.revenue) > 1:
+                if "NetRevenue" in self.revenue[1]:
+                    revenue = self.revenue[1]["NetRevenue"]
 
-    #        return revenue
+        return revenue
 
     def _get_meter_total(self, meter_type):
         """Solar, Charging, Discharging, EDIEL_E17, EDIEL_E18, Soc meter summary."""
