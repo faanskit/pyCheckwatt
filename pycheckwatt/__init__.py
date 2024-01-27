@@ -31,6 +31,7 @@ from dateutil.relativedelta import relativedelta
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class CheckwattManager:
     """CheckWatt manager."""
 
@@ -288,7 +289,6 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
-
     async def get_battery_peak_data(self):
         """Fetch battery peak data from CheckWatt."""
         try:
@@ -346,9 +346,6 @@ class CheckwattManager:
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
-
-
-
 
     async def get_fcrd_month_net_revenue(self):
         """Fetch FCR-D revenues from checkwatt."""
@@ -790,7 +787,7 @@ class CheckwattManager:
         if self.battery_discharge_peak_dc is not None:
             battery_discharge_peak_dc = self.battery_discharge_peak_dc
 
-        return battery_charge_peak_ac,battery_charge_peak_dc,battery_discharge_peak_ac,battery_discharge_peak_dc
+        return battery_charge_peak_ac, battery_charge_peak_dc, battery_discharge_peak_ac, battery_discharge_peak_dc
 
     @property
     def electricity_provider(self):
