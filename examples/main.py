@@ -1,4 +1,5 @@
 """Test-module for pyCheckwatt."""
+
 import argparse
 import json
 import os

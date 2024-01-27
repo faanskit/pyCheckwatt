@@ -1,4 +1,23 @@
-"""CheckWatt module."""
+"""
+CheckwattManager module.
+This module defines the CheckwattManager class, providing an interface for interacting
+with the Checkwatt API to retrieve and manage power-related data.
+Usage:
+    To use this module, instantiate the CheckwattManager class with the required
+    authentication credentials. Use the various methods and attributes to interact
+    with the Checkwatt API and access power-related information.
+Example:
+    ```
+    from checkwatt_manager import CheckwattManager
+    # Instantiate the CheckwattManager class
+    checkwatt_manager = CheckwattManager(username='your_username',
+                                         password='your_password')
+    # Access power-related data
+    power_data = checkwatt_manager.power_data
+    # Perform other operations as needed
+    ```
+"""
+
 from __future__ import annotations
 
 import base64
@@ -30,19 +49,17 @@ class CheckwattManager:
         self.revenueyear = None
         self.revenueyeartotal = 0
         self.revenuemonth = 0
-        self.feesmonth = 0
-        self.fees = None
-        self.feesyear = None
-        self.feesyeartotal = 0
         self.jwt_token = None
         self.refresh_token = None
         self.customer_details = None
         self.battery_registration = None
-        self.battery_charge_peak = None
-        self.battery_discharge_peak = None
+        self.battery_charge_peak_ac = None
+        self.battery_charge_peak_dc = None
+        self.battery_discharge_peak_ac = None
+        self.battery_discharge_peak_dc = None
         self.logbook_entries = None
         self.fcrd_state = None
-        self.fcrd_percentage = None
+        self.fcrd_info = None
         self.fcrd_timestamp = None
         self.power_data = None
         self.price_zone = None
@@ -114,20 +131,25 @@ class CheckwattManager:
 
     def _extract_fcr_d_state(self):
         pattern = re.compile(
-            r"\[ FCR-D (ACTIVATED|DEACTIVATE) \].*?(\d+,\d+/\d+,\d+/\d+,\d+ %).*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"  # noqa: E501
+            r"\[ FCR-D (ACTIVATED|DEACTIVATE|FAIL ACTIVATION) \](?:.*?(\d+,\d+/\d+,\d+/\d+,\d+ %))?(?:\s*(.*?))?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"  # noqa: E501
         )
         for entry in self.logbook_entries:
             match = pattern.search(entry)
             if match:
-                self.fcrd_state = match.group(
-                    1
-                )  # FCR-D state: ACTIVATED or DEACTIVATED
-                self.fcrd_percentage = match.group(
-                    2
-                )  # Percentage, e.g., "99,0/2,9/97,7 %"
-                self.fcrd_timestamp = (
-                    match.group(3) if match else None
-                )  # Timestamp, e.g., "2023-12-20 00:11:45"
+                self.fcrd_state = match.group(1)
+                fcrd_percentage = (
+                    match.group(2)
+                    if self.fcrd_state in ["ACTIVATED", "FAIL ACTIVATION"]
+                    else None
+                )
+                error_info = match.group(3) if self.fcrd_state == "DEACTIVATE" else None
+                self.fcrd_timestamp = match.group(4)
+                if fcrd_percentage is not None:
+                    self.fcrd_info = fcrd_percentage
+                elif error_info is not None:
+                    self.fcrd_info = error_info
+                else:
+                    self.fcrd_info = None
             break  # stop so we get the first row in logbook
 
     async def handle_client_error(self, endpoint, headers, error):
@@ -243,6 +265,50 @@ class CheckwattManager:
                             ),
                             None,
                         )
+
+                        if not soc_meter:
+                            _LOGGER.error("No SoC meter found")
+                            return False
+                        logbook = soc_meter.get("Logbook")
+                        if logbook:
+                            (
+                                self.battery_registration,
+                                self.logbook_entries,
+                            ) = self._extract_content_and_logbook(logbook)
+                            self._extract_fcr_d_state()
+
+                    return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
+    async def get_battery_peak_data(self):
+        """Fetch battery peak data from CheckWatt."""
+        try:
+            endpoint = "/controlpanel/CustomerDetail"
+
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    self.customer_details = await response.json()
+
+                    meters = self.customer_details.get("Meter", [])
+                    if meters:
                         charging_meter = next(
                             (
                                 meter
@@ -260,20 +326,18 @@ class CheckwattManager:
                             None,
                         )
 
-                        if not soc_meter:
-                            _LOGGER.error("No SoC meter found")
+                        if not charging_meter:
+                            _LOGGER.error("No charging meter found")
                             return False
-                        logbook = soc_meter.get("Logbook")
-                        battery_charge_peak = charging_meter.get("PeakAcKw")
-                        battery_discharge_peak = discharging_meter.get("PeakAcKw")
-                        if logbook:
-                            (
-                                self.battery_registration,
-                                self.logbook_entries,
-                            ) = self._extract_content_and_logbook(logbook)
-                            self.battery_charge_peak = battery_charge_peak
-                            self.battery_discharge_peak = battery_discharge_peak
-                            self._extract_fcr_d_state()
+                        self.battery_charge_peak_ac = charging_meter.get("PeakAcKw")
+                        print(self.battery_charge_peak_ac)
+                        self.battery_charge_peak_dc = charging_meter.get("PeakDcKw")
+                        self.battery_discharge_peak_ac = discharging_meter.get(
+                            "PeakAcKw"
+                        )
+                        self.battery_discharge_peak_dc = discharging_meter.get(
+                            "PeakDcKw"
+                        )
 
                     return True
 
@@ -287,26 +351,29 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
-    async def get_fcrd_revenuemonth(self):
+    async def get_fcrd_month_net_revenue(self):
         """Fetch FCR-D revenues from checkwatt."""
         misseddays = 0
         try:
             from_date = datetime.now().strftime("%Y-%m-01")
-            to_date = datetime.now() + timedelta(days=2)
+            to_date = datetime.now() + timedelta(days=1)
+            #            to_date = datetime.now()
             to_date = to_date.strftime("%Y-%m-%d")
-
             lastday_date = datetime.now() + relativedelta(months=1)
             lastday_date = datetime(
                 year=lastday_date.year, month=lastday_date.month, day=1
             )
+
             lastday_date = lastday_date - timedelta(days=1)
+
             lastday = lastday_date.strftime("%d")
 
-            dayssofar = datetime.now() + timedelta(days=1)
+            dayssofar = datetime.now()
+            #            dayssofar = datetime.now() + timedelta(days=1)
             dayssofar = dayssofar.strftime("%d")
-            daysleft = int(lastday) - int(dayssofar)
 
-            endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
+            daysleft = int(lastday) - int(dayssofar)
+            endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"
 
             # Define headers with the JwtToken
             headers = {
@@ -321,30 +388,16 @@ class CheckwattManager:
                 response.raise_for_status()
                 revenue = await response.json()
                 for each in revenue:
-                    self.revenuemonth += each["Revenue"]
-                    if each["Revenue"] == 0:
+                    self.revenuemonth += each["NetRevenue"]
+                    if each["NetRevenue"] == 0:
                         misseddays += 1
-                dayswithmoney = int(dayssofar) - misseddays
+                dayswithmoney = int(dayssofar) - int(misseddays)
                 if response.status == 200:
-                    # Then fetch the service fees
-                    endpoint = (
-                        f"/ems/service/fees?fromDate={from_date}&toDate={to_date}"
-                    )
-                    async with self.session.get(
-                        self.base_url + endpoint, headers=headers
-                    ) as response:
-                        response.raise_for_status()
-                        fees = await response.json()
-                        for each in fees["FCRD"]:
-                            self.feesmonth += each["Revenue"]
-                        self.dailyaverage = (
-                            int(self.revenuemonth) - int(self.feesmonth)
-                        ) / int(dayswithmoney)
-                        self.monthestimate = (self.dailyaverage * daysleft) + (
-                            int(self.revenuemonth) - int(self.feesmonth)
-                        )
-                        if response.status == 200:
-                            return True
+                    self.dailyaverage = self.revenuemonth / int(dayswithmoney)
+                    self.monthestimate = (
+                        self.dailyaverage * daysleft
+                    ) + self.revenuemonth
+                    return True
 
                 _LOGGER.error(
                     "Obtaining data from URL %s failed with status code %d",
@@ -356,21 +409,20 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
-    async def get_fcrd_revenue(self):
+    async def get_fcrd_today_net_revenue(self):
         """Fetch FCR-D revenues from checkwatt."""
         try:
             from_date = datetime.now().strftime("%Y-%m-%d")
             end_date = datetime.now() + timedelta(days=2)
             to_date = end_date.strftime("%Y-%m-%d")
 
-            endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
+            endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"
 
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
                 "authorization": f"Bearer {self.jwt_token}",
             }
-
             # First fetch the revenue
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -378,17 +430,7 @@ class CheckwattManager:
                 response.raise_for_status()
                 self.revenue = await response.json()
                 if response.status == 200:
-                    # Then fetch the service fees
-                    endpoint = (
-                        f"/ems/service/fees?fromDate={from_date}&toDate={to_date}"
-                    )
-                    async with self.session.get(
-                        self.base_url + endpoint, headers=headers
-                    ) as response:
-                        response.raise_for_status()
-                        self.fees = await response.json()
-                        if response.status == 200:
-                            return True
+                    return True
 
                 _LOGGER.error(
                     "Obtaining data from URL %s failed with status code %d",
@@ -400,9 +442,9 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
-    async def get_fcrd_revenueyear(self):
+    async def get_fcrd_year_net_revenue(self):
         """Fetch FCR-D revenues from CheckWatt."""
-        yesterday_date = datetime.now()
+        yesterday_date = datetime.now() + timedelta(days=1)
         yesterday_date = yesterday_date.strftime("-%m-%d")
         months = ["-01-01", "-06-30", "-07-01", yesterday_date]
         loop = 0
@@ -412,7 +454,7 @@ class CheckwattManager:
                 year_date = datetime.now().strftime("%Y")
                 to_date = year_date + yesterday_date
                 from_date = year_date + "-01-01"
-                endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"
+                endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"
                 # Define headers with the JwtToken
                 headers = {
                     **self._get_headers(),
@@ -425,25 +467,9 @@ class CheckwattManager:
                     responseyear.raise_for_status()
                     self.revenueyear = await responseyear.json()
                     for each in self.revenueyear:
-                        self.revenueyeartotal += each["Revenue"]
+                        self.revenueyeartotal += each["NetRevenue"]
                     if responseyear.status == 200:
-                        # Then fetch the service fees
-                        endpoint = f"/ems/service/fees?fromDate={from_date}&toDate={to_date}"  # noqa: E501
-                        async with self.session.get(
-                            self.base_url + endpoint, headers=headers
-                        ) as responseyear:  # noqa: E501
-                            responseyear.raise_for_status()
-                            self.feesyear = await responseyear.json()
-                            for each in self.feesyear["FCRD"]:
-                                self.feesyeartotal += each["Revenue"]
-                            if responseyear.status == 200:
-                                retval = True
-                            else:
-                                _LOGGER.error(
-                                    "Obtaining data from URL %s failed with status code %d",  # noqa: E501
-                                    self.base_url + endpoint,
-                                    responseyear.status,
-                                )
+                        retval = True
                     else:
                         _LOGGER.error(
                             "Obtaining data from URL %s failed with status code %d",
@@ -460,7 +486,7 @@ class CheckwattManager:
                     year_date = datetime.now().strftime("%Y")
                     to_date = year_date + months[loop + 1]
                     from_date = year_date + months[loop]
-                    endpoint = f"/ems/fcrd/revenue?fromDate={from_date}&toDate={to_date}"  # noqa: E501
+                    endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"  # noqa: E501
                     # Define headers with the JwtToken
                     headers = {
                         **self._get_headers(),
@@ -473,26 +499,10 @@ class CheckwattManager:
                         responseyear.raise_for_status()
                         self.revenueyear = await responseyear.json()
                         for each in self.revenueyear:
-                            self.revenueyeartotal += each["Revenue"]
+                            self.revenueyeartotal += each["NetRevenue"]
                         if responseyear.status == 200:
-                            # Then fetch the service fees
-                            endpoint = f"/ems/service/fees?fromDate={from_date}&toDate={to_date}"  # noqa: E501
-                            async with self.session.get(
-                                self.base_url + endpoint, headers=headers
-                            ) as responseyear:
-                                responseyear.raise_for_status()
-                                self.feesyear = await responseyear.json()
-                                for each in self.feesyear["FCRD"]:
-                                    self.feesyeartotal += each["Revenue"]
-                                if responseyear.status == 200:
-                                    loop += 2
-                                    retval = True
-                                else:
-                                    _LOGGER.error(
-                                        "Obtaining data from URL %s failed with status code %d",  # noqa: E501
-                                        self.base_url + endpoint,
-                                        responseyear.status,
-                                    )
+                            loop += 2
+                            retval = True
                         else:
                             _LOGGER.error(
                                 "Obtaining data from URL %s failed with status code %d",  # noqa: E501
@@ -769,6 +779,29 @@ class CheckwattManager:
             return "Could not get any information about your battery"
 
     @property
+    def battery_peak_data(self):
+        """Property for battery peak."""
+        battery_charge_peak_ac = 0
+        battery_charge_peak_dc = 0
+        battery_discharge_peak_ac = 0
+        battery_discharge_peak_dc = 0
+        if self.battery_charge_peak_ac is not None:
+            battery_charge_peak_ac = self.battery_charge_peak_ac
+        if self.battery_charge_peak_dc is not None:
+            battery_charge_peak_dc = self.battery_charge_peak_dc
+        if self.battery_discharge_peak_ac is not None:
+            battery_discharge_peak_ac = self.battery_discharge_peak_ac
+        if self.battery_discharge_peak_dc is not None:
+            battery_discharge_peak_dc = self.battery_discharge_peak_dc
+
+        return (
+            battery_charge_peak_ac,
+            battery_charge_peak_dc,
+            battery_discharge_peak_ac,
+            battery_discharge_peak_dc,
+        )
+
+    @property
     def electricity_provider(self):
         """Property for electricity provides. Not used by HA integration."""
         if (
@@ -794,76 +827,62 @@ class CheckwattManager:
         return None
 
     @property
-    def year_revenue(self):
+    def fcrd_year_net_revenue(self):
         """Property for today's revenue."""
         revenueyear = 0
-        feesyear = 0
         if self.revenueyeartotal is not None:
             revenueyear = self.revenueyeartotal
 
-        if self.feesyeartotal is not None:
-            feesyear = self.feesyeartotal
-
-        return revenueyear, feesyear
+        return revenueyear
 
     @property
-    def month_revenue(self):
+    def fcrd_month_net_revenue(self):
         """Property for today's revenue."""
         revenuemonth = 0
-        feesmonth = 0
-        dailyaverage = 0
-        monthestimate = 0
         if self.revenuemonth is not None:
             revenuemonth = self.revenuemonth
 
-        if self.feesmonth is not None:
-            feesmonth = self.feesmonth
+        return revenuemonth
 
-        if self.dailyaverage is not None:
-            dailyaverage = self.dailyaverage
-
+    @property
+    def fcrd_month_net_estimate(self):
+        """Property for today's revenue."""
+        monthestimate = 0
         if self.monthestimate is not None:
             monthestimate = self.monthestimate
 
-        return revenuemonth, feesmonth, dailyaverage, monthestimate
+        return monthestimate
 
     @property
-    def today_revenue(self):
+    def fcrd_daily_net_average(self):
+        """Property for today's revenue."""
+        dailyaverage = 0
+        if self.dailyaverage is not None:
+            dailyaverage = self.dailyaverage
+
+        return dailyaverage
+
+    @property
+    def fcrd_today_net_revenue(self):
         """Property for today's revenue."""
         revenue = 0
-        fees = 0
         if self.revenue is not None:
             if len(self.revenue) > 0:
-                if "Revenue" in self.revenue[0]:
-                    revenue = self.revenue[0]["Revenue"]
+                if "NetRevenue" in self.revenue[0]:
+                    revenue = self.revenue[0]["NetRevenue"]
 
-        if self.fees is not None:
-            if "FCRD" in self.fees:
-                if len(self.fees["FCRD"]) > 0:
-                    # Take note: It is called Revenue also in fees
-                    if "Revenue" in self.fees["FCRD"][0]:
-                        fees = self.fees["FCRD"][0]["Revenue"]
-
-        return revenue, fees
+        return revenue
 
     @property
-    def tomorrow_revenue(self):
+    def fcrd_tomorrow_net_revenue(self):
         """Property for tomorrow's revenue."""
         revenue = 0
-        fees = 0
         if self.revenue is not None:
             if len(self.revenue) > 1:
-                if "Revenue" in self.revenue[1]:
-                    revenue = self.revenue[1]["Revenue"]
+                if "NetRevenue" in self.revenue[1]:
+                    revenue = self.revenue[1]["NetRevenue"]
 
-        if self.fees is not None:
-            if "FCRD" in self.fees:
-                if len(self.fees["FCRD"]) > 1:
-                    # Take note: It is called Revenue also in fees
-                    if "Revenue" in self.fees["FCRD"][1]:
-                        fees = self.fees["FCRD"][1]["Revenue"]
-
-        return revenue, fees
+        return revenue
 
     def _get_meter_total(self, meter_type):
         """Solar, Charging, Discharging, EDIEL_E17, EDIEL_E18, Soc meter summary."""
