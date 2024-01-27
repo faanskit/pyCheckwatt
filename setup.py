@@ -1,4 +1,5 @@
 """Setup script for pyCheckwatt module."""
+
 from setuptools import find_packages, setup
 
 MIN_PY_VERSION = "3.10"
