@@ -131,7 +131,7 @@ class CheckwattManager:
 
     def _extract_fcr_d_state(self):
         pattern = re.compile(
-            r"\[ FCR-D (ACTIVATED|DEACTIVATE|FAIL ACTIVATION) \](?:.*?(\d+,\d+/\d+,\d+/\d+,\d+ %))?(?:\s*(.*?))?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})" # noqa: E501
+            r"\[ FCR-D (ACTIVATED|DEACTIVATE|FAIL ACTIVATION) \](?:.*?(\d+,\d+/\d+,\d+/\d+,\d+ %))?(?:\s*(.*?))?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"  # noqa: E501
         )
         for entry in self.logbook_entries:
             match = pattern.search(entry)
@@ -332,8 +332,12 @@ class CheckwattManager:
                         self.battery_charge_peak_ac = charging_meter.get("PeakAcKw")
                         print(self.battery_charge_peak_ac)
                         self.battery_charge_peak_dc = charging_meter.get("PeakDcKw")
-                        self.battery_discharge_peak_ac = discharging_meter.get("PeakAcKw")
-                        self.battery_discharge_peak_dc = discharging_meter.get("PeakDcKw")
+                        self.battery_discharge_peak_ac = discharging_meter.get(
+                            "PeakAcKw"
+                        )
+                        self.battery_discharge_peak_dc = discharging_meter.get(
+                            "PeakDcKw"
+                        )
 
                     return True
 
@@ -353,17 +357,19 @@ class CheckwattManager:
         try:
             from_date = datetime.now().strftime("%Y-%m-01")
             to_date = datetime.now() + timedelta(days=1)
-#            to_date = datetime.now()
+            #            to_date = datetime.now()
             to_date = to_date.strftime("%Y-%m-%d")
             lastday_date = datetime.now() + relativedelta(months=1)
-            lastday_date = datetime(year=lastday_date.year, month=lastday_date.month, day=1)
+            lastday_date = datetime(
+                year=lastday_date.year, month=lastday_date.month, day=1
+            )
 
             lastday_date = lastday_date - timedelta(days=1)
 
             lastday = lastday_date.strftime("%d")
 
             dayssofar = datetime.now()
-#            dayssofar = datetime.now() + timedelta(days=1)
+            #            dayssofar = datetime.now() + timedelta(days=1)
             dayssofar = dayssofar.strftime("%d")
 
             daysleft = int(lastday) - int(dayssofar)
@@ -388,8 +394,9 @@ class CheckwattManager:
                 dayswithmoney = int(dayssofar) - int(misseddays)
                 if response.status == 200:
                     self.dailyaverage = self.revenuemonth / int(dayswithmoney)
-                    self.monthestimate = ((self.dailyaverage * daysleft)
-                    + self.revenuemonth)
+                    self.monthestimate = (
+                        self.dailyaverage * daysleft
+                    ) + self.revenuemonth
                     return True
 
                 _LOGGER.error(
@@ -787,7 +794,12 @@ class CheckwattManager:
         if self.battery_discharge_peak_dc is not None:
             battery_discharge_peak_dc = self.battery_discharge_peak_dc
 
-        return battery_charge_peak_ac, battery_charge_peak_dc, battery_discharge_peak_ac, battery_discharge_peak_dc
+        return (
+            battery_charge_peak_ac,
+            battery_charge_peak_dc,
+            battery_discharge_peak_ac,
+            battery_discharge_peak_dc,
+        )
 
     @property
     def electricity_provider(self):
@@ -861,16 +873,16 @@ class CheckwattManager:
 
         return revenue
 
-#    @property
-#    def tomorrow_revenue(self):
-#        """Property for tomorrow's revenue."""
-#        revenue = 0
-#        if self.revenue is not None:
-#            if len(self.revenue) > 1:
-#                if "NetRevenue" in self.revenue[1]:
-#                    revenue = self.revenue[1]["NetRevenue"]
+    #    @property
+    #    def tomorrow_revenue(self):
+    #        """Property for tomorrow's revenue."""
+    #        revenue = 0
+    #        if self.revenue is not None:
+    #            if len(self.revenue) > 1:
+    #                if "NetRevenue" in self.revenue[1]:
+    #                    revenue = self.revenue[1]["NetRevenue"]
 
-#        return revenue
+    #        return revenue
 
     def _get_meter_total(self, meter_type):
         """Solar, Charging, Discharging, EDIEL_E17, EDIEL_E18, Soc meter summary."""

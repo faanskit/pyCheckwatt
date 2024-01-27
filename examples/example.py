@@ -1,4 +1,5 @@
 """Test-module for pyCheckwatt."""
+
 import argparse
 import json
 
@@ -72,14 +73,14 @@ async def main(show_details=False):
                 print(
                     "{:<24}  {:>6}  {:>0}".format(
                         "Year revenue:",
-                            int(check_watt_instance.fcrd_year_net_revenue),
+                        int(check_watt_instance.fcrd_year_net_revenue),
                         "kr",
                     )
                 )
                 print(
                     "{:<24}  {:>6}  {:>0}".format(
                         "Today revenue:",
-                            int(check_watt_instance.fcrd_today_net_revenue),
+                        int(check_watt_instance.fcrd_today_net_revenue),
                         "kr",
                     )
                 )

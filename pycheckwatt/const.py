@@ -1,4 +1,5 @@
 """Docstring."""
+
 SENSOR = "SENSOR"
 
 
