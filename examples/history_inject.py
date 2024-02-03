@@ -1,8 +1,10 @@
 """Pulls historical data from CheckWatt EnergyInBalance and push it to CheckWattRank"""
 
-from pycheckwatt import CheckwattManager
 import json
+
 import aiohttp
+
+from pycheckwatt import CheckwattManager
 
 START_DATE = "2023-09-01"
 END_DATE = "2024-01-31"
