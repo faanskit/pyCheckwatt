@@ -24,7 +24,7 @@ import base64
 import json
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from aiohttp import ClientError, ClientResponseError, ClientSession
 from dateutil.relativedelta import relativedelta
@@ -227,7 +227,7 @@ class CheckwattManager:
 
                 if response.status == 401:
                     _LOGGER.error(
-                        "Unauthorized: Check your checkwatt authentication credentials"
+                        "Unauthorized: Check your CheckWatt authentication credentials"
                     )
                     return False
 
@@ -318,7 +318,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_fcrd_month_net_revenue(self):
-        """Fetch FCR-D revenues from checkwatt."""
+        """Fetch FCR-D revenues from CheckWatt."""
         misseddays = 0
         try:
             from_date = datetime.now().strftime("%Y-%m-01")
@@ -376,7 +376,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_fcrd_today_net_revenue(self):
-        """Fetch FCR-D revenues from checkwatt."""
+        """Fetch FCR-D revenues from CheckWatt."""
         try:
             from_date = datetime.now().strftime("%Y-%m-%d")
             end_date = datetime.now() + timedelta(days=2)
@@ -480,6 +480,65 @@ class CheckwattManager:
             except (ClientResponseError, ClientError) as error:
                 return await self.handle_client_error(endpoint, headers, error)
 
+    async def fetch_and_return_net_revenue(self, from_date, to_date):
+        """Fetch FCR-D revenues from CheckWatt as per provided range."""
+        try:
+            # Validate date format and ensure they are dates
+            date_format = "%Y-%m-%d"
+            try:
+                from_date = datetime.strptime(from_date, date_format).date()
+                to_date = datetime.strptime(to_date, date_format).date()
+            except ValueError:
+                raise ValueError(
+                    "Input dates must be valid dates with the format YYYY-MM-DD."
+                )
+
+            # Validate from_date and to_date
+            today = date.today()
+            six_months_ago = today - relativedelta(months=6)
+
+            if not (six_months_ago <= from_date <= today):
+                raise ValueError(
+                    "From date must be within the last 6 months and not beyond today."
+                )
+
+            if not (six_months_ago <= to_date <= today):
+                raise ValueError(
+                    "To date must be within the last 6 months and not beyond today."
+                )
+
+            if from_date >= to_date:
+                raise ValueError("From date must be before To date.")
+
+            # Extend to_date by one day
+            to_date += timedelta(days=1)
+
+            endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"
+
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                revenue = await response.json()
+                if response.status == 200:
+                    return revenue
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return None
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
         to_date = end_date.strftime("%Y")
@@ -497,7 +556,7 @@ class CheckwattManager:
             return None
 
     async def get_power_data(self):
-        """Fetch Power Data from checkwatt."""
+        """Fetch Power Data from CheckWatt."""
 
         try:
             endpoint = self._build_series_endpoint(
@@ -561,7 +620,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_price_zone(self):
-        """Fetch Price Zone from checkwatt."""
+        """Fetch Price Zone from CheckWatt."""
 
         try:
             endpoint = "/ems/pricezone"
@@ -591,7 +650,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_spot_price(self):
-        """Fetch Spot Price from checkwatt."""
+        """Fetch Spot Price from CheckWatt."""
 
         try:
             from_date = datetime.now().strftime("%Y-%m-%d")
