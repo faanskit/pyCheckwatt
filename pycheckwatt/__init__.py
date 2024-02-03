@@ -277,38 +277,6 @@ class CheckwattManager:
                             ) = self._extract_content_and_logbook(logbook)
                             self._extract_fcr_d_state()
 
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
-                return False
-
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
-
-    async def get_battery_peak_data(self):
-        """Fetch battery peak data from CheckWatt."""
-        try:
-            endpoint = "/controlpanel/CustomerDetail"
-
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    self.customer_details = await response.json()
-
-                    meters = self.customer_details.get("Meter", [])
-                    if meters:
                         charging_meter = next(
                             (
                                 meter
@@ -317,7 +285,11 @@ class CheckwattManager:
                             ),
                             None,
                         )
-                        discharging_meter = next(
+                        if charging_meter:
+                            self.battery_charge_peak_ac = charging_meter.get("PeakAcKw")
+                            self.battery_charge_peak_dc = charging_meter.get("PeakDcKw")
+
+                        discharge_meter = next(
                             (
                                 meter
                                 for meter in meters
@@ -325,19 +297,13 @@ class CheckwattManager:
                             ),
                             None,
                         )
-
-                        if not charging_meter:
-                            _LOGGER.error("No charging meter found")
-                            return False
-                        self.battery_charge_peak_ac = charging_meter.get("PeakAcKw")
-                        print(self.battery_charge_peak_ac)
-                        self.battery_charge_peak_dc = charging_meter.get("PeakDcKw")
-                        self.battery_discharge_peak_ac = discharging_meter.get(
-                            "PeakAcKw"
-                        )
-                        self.battery_discharge_peak_dc = discharging_meter.get(
-                            "PeakDcKw"
-                        )
+                        if discharge_meter:
+                            self.battery_discharge_peak_ac = discharge_meter.get(
+                                "PeakAcKw"
+                            )
+                            self.battery_discharge_peak_dc = discharge_meter.get(
+                                "PeakDcKw"
+                            )
 
                     return True
 
