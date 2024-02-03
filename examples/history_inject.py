@@ -86,7 +86,9 @@ async def main():
                         netlify_function_url, json=data
                     ) as response:
                         if response.status == 200:
-                            print("Data posted successfully to Netlify function.")
+                            result = await response.json()
+                            count = result.get("count", 0)
+                            print(f"Data posted successfully. Count: {count}")
                         else:
                             print(
                                 f"Failed to post data. Status code: {response.status}"
