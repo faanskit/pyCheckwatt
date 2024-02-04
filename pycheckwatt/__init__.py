@@ -24,7 +24,7 @@ import base64
 import json
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from aiohttp import ClientError, ClientResponseError, ClientSession
 from dateutil.relativedelta import relativedelta
@@ -68,6 +68,9 @@ class CheckwattManager:
         self.header_identifier = application
         self.rpi_data = None
         self.meter_data = None
+        self.display_name = None
+        self.reseller_id = None
+        self.energy_provider_id = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -227,7 +230,7 @@ class CheckwattManager:
 
                 if response.status == 401:
                     _LOGGER.error(
-                        "Unauthorized: Check your checkwatt authentication credentials"
+                        "Unauthorized: Check your CheckWatt authentication credentials"
                     )
                     return False
 
@@ -269,6 +272,11 @@ class CheckwattManager:
                         if not soc_meter:
                             _LOGGER.error("No SoC meter found")
                             return False
+
+                        self.display_name = soc_meter.get("DisplayName")
+                        self.reseller_id = soc_meter.get("ResellerId")
+                        self.energy_provider_id = soc_meter.get("ElhandelsbolagId")
+
                         logbook = soc_meter.get("Logbook")
                         if logbook:
                             (
@@ -277,38 +285,6 @@ class CheckwattManager:
                             ) = self._extract_content_and_logbook(logbook)
                             self._extract_fcr_d_state()
 
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
-                return False
-
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
-
-    async def get_battery_peak_data(self):
-        """Fetch battery peak data from CheckWatt."""
-        try:
-            endpoint = "/controlpanel/CustomerDetail"
-
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    self.customer_details = await response.json()
-
-                    meters = self.customer_details.get("Meter", [])
-                    if meters:
                         charging_meter = next(
                             (
                                 meter
@@ -317,7 +293,11 @@ class CheckwattManager:
                             ),
                             None,
                         )
-                        discharging_meter = next(
+                        if charging_meter:
+                            self.battery_charge_peak_ac = charging_meter.get("PeakAcKw")
+                            self.battery_charge_peak_dc = charging_meter.get("PeakDcKw")
+
+                        discharge_meter = next(
                             (
                                 meter
                                 for meter in meters
@@ -325,19 +305,13 @@ class CheckwattManager:
                             ),
                             None,
                         )
-
-                        if not charging_meter:
-                            _LOGGER.error("No charging meter found")
-                            return False
-                        self.battery_charge_peak_ac = charging_meter.get("PeakAcKw")
-                        print(self.battery_charge_peak_ac)
-                        self.battery_charge_peak_dc = charging_meter.get("PeakDcKw")
-                        self.battery_discharge_peak_ac = discharging_meter.get(
-                            "PeakAcKw"
-                        )
-                        self.battery_discharge_peak_dc = discharging_meter.get(
-                            "PeakDcKw"
-                        )
+                        if discharge_meter:
+                            self.battery_discharge_peak_ac = discharge_meter.get(
+                                "PeakAcKw"
+                            )
+                            self.battery_discharge_peak_dc = discharge_meter.get(
+                                "PeakDcKw"
+                            )
 
                     return True
 
@@ -352,7 +326,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_fcrd_month_net_revenue(self):
-        """Fetch FCR-D revenues from checkwatt."""
+        """Fetch FCR-D revenues from CheckWatt."""
         misseddays = 0
         try:
             from_date = datetime.now().strftime("%Y-%m-01")
@@ -410,7 +384,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_fcrd_today_net_revenue(self):
-        """Fetch FCR-D revenues from checkwatt."""
+        """Fetch FCR-D revenues from CheckWatt."""
         try:
             from_date = datetime.now().strftime("%Y-%m-%d")
             end_date = datetime.now() + timedelta(days=2)
@@ -514,6 +488,65 @@ class CheckwattManager:
             except (ClientResponseError, ClientError) as error:
                 return await self.handle_client_error(endpoint, headers, error)
 
+    async def fetch_and_return_net_revenue(self, from_date, to_date):
+        """Fetch FCR-D revenues from CheckWatt as per provided range."""
+        try:
+            # Validate date format and ensure they are dates
+            date_format = "%Y-%m-%d"
+            try:
+                from_date = datetime.strptime(from_date, date_format).date()
+                to_date = datetime.strptime(to_date, date_format).date()
+            except ValueError:
+                raise ValueError(
+                    "Input dates must be valid dates with the format YYYY-MM-DD."
+                )
+
+            # Validate from_date and to_date
+            today = date.today()
+            six_months_ago = today - relativedelta(months=6)
+
+            if not (six_months_ago <= from_date <= today):
+                raise ValueError(
+                    "From date must be within the last 6 months and not beyond today."
+                )
+
+            if not (six_months_ago <= to_date <= today):
+                raise ValueError(
+                    "To date must be within the last 6 months and not beyond today."
+                )
+
+            if from_date >= to_date:
+                raise ValueError("From date must be before To date.")
+
+            # Extend to_date by one day
+            to_date += timedelta(days=1)
+
+            endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"
+
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                revenue = await response.json()
+                if response.status == 200:
+                    return revenue
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return None
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
         to_date = end_date.strftime("%Y")
@@ -531,7 +564,7 @@ class CheckwattManager:
             return None
 
     async def get_power_data(self):
-        """Fetch Power Data from checkwatt."""
+        """Fetch Power Data from CheckWatt."""
 
         try:
             endpoint = self._build_series_endpoint(
@@ -595,7 +628,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_price_zone(self):
-        """Fetch Price Zone from checkwatt."""
+        """Fetch Price Zone from CheckWatt."""
 
         try:
             endpoint = "/ems/pricezone"
@@ -625,7 +658,7 @@ class CheckwattManager:
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_spot_price(self):
-        """Fetch Spot Price from checkwatt."""
+        """Fetch Spot Price from CheckWatt."""
 
         try:
             from_date = datetime.now().strftime("%Y-%m-%d")
