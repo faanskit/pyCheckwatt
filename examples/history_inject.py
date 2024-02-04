@@ -13,40 +13,7 @@ EIB_USERNAME = ""
 EIB_PASSWORD = ""
 DISPLAY_NAME_OVERRIDE = ""
 
-
-def get_display_name(cw):
-    """Pull DisplayName from CW Data"""
-    if DISPLAY_NAME_OVERRIDE != "":
-        return DISPLAY_NAME_OVERRIDE
-
-    meters = cw.customer_details.get("Meter", [])
-    if meters:
-        soc_meter = next(
-            (meter for meter in meters if meter.get("InstallationType") == "SoC"),
-            None,
-        )
-
-        if not soc_meter:
-            print("No SoC meter found")
-            return False
-
-        return soc_meter["DisplayName"]
-
-
-def get_reseller_id(cw):
-    """Pull ResellerId from CW Data"""
-    meters = cw.customer_details.get("Meter", [])
-    if meters:
-        soc_meter = next(
-            (meter for meter in meters if meter.get("InstallationType") == "SoC"),
-            None,
-        )
-
-        if not soc_meter:
-            print("No SoC meter found")
-            return False
-
-        return soc_meter["ResellerId"]
+BASE_URL = "https://checkwattrank.netlify.app/"
 
 
 async def main():
@@ -60,26 +27,43 @@ async def main():
             # Login to EnergyInBalance
             if await cw.login():
                 # Fetch customer detail
-                await cw.get_customer_details()
-                await cw.get_price_zone()
+                if not await cw.get_customer_details():
+                    print("Failed to fetch customer details")
+                    return
+
+                if not await cw.get_price_zone():
+                    print("Failed to fetch prize zone")
+                    return
+
                 hd = await cw.fetch_and_return_net_revenue(START_DATE, END_DATE)
+                if hd is None:
+                    print("Failed to fetch revenues")
+                    return
+
+                energy_provider = await cw.get_energy_trading_company(
+                    cw.energy_provider_id
+                )
+                if energy_provider is None:
+                    print("Failed to fetch electricity compan")
+                    return
 
                 data = {
-                    "display_name": get_display_name(cw),
+                    "display_name": (
+                        DISPLAY_NAME_OVERRIDE
+                        if DISPLAY_NAME_OVERRIDE != ""
+                        else cw.display_name
+                    ),
                     "dso": cw.battery_registration["Dso"],
                     "electricity_area": cw.price_zone,
                     "installed_power": cw.battery_charge_peak_ac,
-                    "electricity_company": cw.battery_registration[
-                        "ElectricityCompany"
-                    ],
-                    "reseller_id": get_reseller_id(cw),
+                    "electricity_company": energy_provider,
+                    "reseller_id": cw.reseller_id,
                     "reporter": "CheckWattRank",
                     "historical_data": hd,
                 }
                 print(f"{json.dumps(data, indent=4)}")
 
                 # Post data to Netlify function
-                BASE_URL = "https://checkwattrank.netlify.app/"
                 netlify_function_url = BASE_URL + "/.netlify/functions/publishHistory"
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
@@ -88,7 +72,8 @@ async def main():
                         if response.status == 200:
                             result = await response.json()
                             count = result.get("count", 0)
-                            print(f"Data posted successfully. Count: {count}")
+                            total = result.get("total", 0)
+                            print(f"Data posted successfully. Count: {count}/{total}")
                         else:
                             print(
                                 f"Failed to post data. Status code: {response.status}"

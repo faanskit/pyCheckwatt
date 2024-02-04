@@ -68,6 +68,9 @@ class CheckwattManager:
         self.header_identifier = application
         self.rpi_data = None
         self.meter_data = None
+        self.display_name = None
+        self.reseller_id = None
+        self.energy_provider_id = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -269,6 +272,11 @@ class CheckwattManager:
                         if not soc_meter:
                             _LOGGER.error("No SoC meter found")
                             return False
+
+                        self.display_name = soc_meter.get("DisplayName")
+                        self.reseller_id = soc_meter.get("ResellerId")
+                        self.energy_provider_id = soc_meter.get("ElhandelsbolagId")
+
                         logbook = soc_meter.get("Logbook")
                         if logbook:
                             (
