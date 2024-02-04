@@ -1104,3 +1104,147 @@ class CheckwattManager:
 
         _LOGGER.warning("Unable to find Meter Data for Meter Version")
         return None
+
+
+class CheckWattRankManager:
+    def __init__(self) -> None:
+        self.session = None
+        self.base_url = "https://checkwattrank.netlify.app"
+
+    async def __aenter__(self):
+        """Asynchronous enter."""
+        self.session = ClientSession()
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        """Asynchronous exit."""
+        await self.session.close()
+
+    async def push_to_checkwatt_rank(
+        self,
+        display_name,
+        dso,
+        electricity_company,
+        electricity_area,
+        installed_power,
+        today_net_income,
+        reseller_id,
+        reporter,
+    ):
+        """Push Data to CheckWattRank."""
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+        url = self.base_url + "/.netlify/functions/publishToSheet"
+
+        payload = {
+            "display_name": display_name,
+            "dso": dso,
+            "electricity_company": electricity_company,
+            "electricity_area": electricity_area,
+            "installed_power": installed_power,
+            "today_net_income": today_net_income,
+            "reseller_id": reseller_id,
+            "reporter": reporter,
+        }
+
+        timeout_seconds = 10
+        async with ClientSession() as session:
+            try:
+                async with session.post(
+                    url, headers=headers, json=payload, timeout=timeout_seconds
+                ) as response:
+                    response.raise_for_status()
+                    content_type = response.headers.get("Content-Type", "").lower()
+                    _LOGGER.debug(
+                        "CheckWattRank Push Response Content-Type: %s",
+                        content_type,
+                    )
+
+                    if "application/json" in content_type:
+                        result = await response.json()
+                        _LOGGER.debug("CheckWattRank Push Response: %s", result)
+                        return True
+                    elif "text/plain" in content_type:
+                        result = await response.text()
+                        _LOGGER.debug("CheckWattRank Push Response: %s", result)
+                        return True
+                    else:
+                        _LOGGER.warning("Unexpected Content-Type: %s", content_type)
+                        result = await response.text()
+                        _LOGGER.debug("CheckWattRank Push Response: %s", result)
+
+            except ClientError as e:
+                _LOGGER.error("Error pushing data to CheckWattRank: %s", e)
+
+            except TimeoutError:
+                _LOGGER.error(
+                    "Request to CheckWattRank timed out after %s seconds",
+                    timeout_seconds,
+                )
+        return False
+
+    async def push_history_to_checkwatt_rank(
+        self,
+        display_name,
+        dso,
+        electricity_company,
+        electricity_area,
+        installed_power,
+        reseller_id,
+        reporter,
+        historical_data,
+    ):
+        headers = {
+            "Content-Type": "application/json",
+        }
+        url = self.base_url + "/.netlify/functions/publishHistory"
+
+        payload = {
+            "display_name": display_name,
+            "dso": dso,
+            "electricity_company": electricity_company,
+            "electricity_area": electricity_area,
+            "installed_power": installed_power,
+            "reseller_id": reseller_id,
+            "reporter": reporter,
+            "historical_data": historical_data,
+        }
+        timeout_seconds = 10
+        stored_items = 0
+        total_items = 0
+        status = None
+        async with ClientSession() as session:
+            try:
+                async with session.post(
+                    url, headers=headers, json=payload, timeout=timeout_seconds
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        stored_items = result.get("count", 0)
+                        total_items = result.get("total", 0)
+                        status = result.get("message", 0)
+                    else:
+                        _LOGGER.debug(
+                            "Failed to post data. Status code: %s",
+                            response.status,
+                        )
+                        status = f"Failed to post data. Status code: {response.status}"
+
+            except ClientError as e:
+                _LOGGER.error("Error pushing data to CheckWattRank: %s", e)
+                status = f"Failed to push historical data. Error {e}"
+
+            except TimeoutError:
+                _LOGGER.error(
+                    "Request to CheckWattRank timed out after %s seconds",
+                    timeout_seconds,
+                )
+                status = "Timeout pushing historical data."
+
+        return (
+            status,
+            stored_items,
+            total_items,
+        )

@@ -1,8 +1,6 @@
 """Pulls historical data from CheckWatt EnergyInBalance and push it to CheckWattRank"""
 
-import aiohttp
-
-from pycheckwatt import CheckwattManager
+from pycheckwatt import CheckwattManager, CheckWattRankManager
 
 START_DATE = "2023-09-01"
 END_DATE = "2024-01-31"
@@ -45,36 +43,25 @@ async def main():
                     print("Failed to fetch electricity compan")
                     return
 
-                data = {
-                    "display_name": (
-                        DISPLAY_NAME_OVERRIDE
-                        if DISPLAY_NAME_OVERRIDE != ""
-                        else cw.display_name
-                    ),
-                    "dso": cw.battery_registration["Dso"],
-                    "electricity_area": cw.price_zone,
-                    "installed_power": cw.battery_charge_peak_ac,
-                    "electricity_company": energy_provider,
-                    "reseller_id": cw.reseller_id,
-                    "reporter": "CheckWattRank",
-                    "historical_data": hd,
-                }
-
-                # Post data to Netlify function
-                netlify_function_url = BASE_URL + "/.netlify/functions/publishHistory"
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        netlify_function_url, json=data
-                    ) as response:
-                        if response.status == 200:
-                            result = await response.json()
-                            count = result.get("count", 0)
-                            total = result.get("total", 0)
-                            print(f"Data posted successfully. Count: {count}/{total}")
-                        else:
-                            print(
-                                f"Failed to post data. Status code: {response.status}"
-                            )
+                async with CheckWattRankManager() as cwr:
+                    (status, stored_items, total_items) = (
+                        await cwr.push_history_to_checkwatt_rank(
+                            display_name=(
+                                DISPLAY_NAME_OVERRIDE
+                                if DISPLAY_NAME_OVERRIDE != ""
+                                else cw.display_name
+                            ),
+                            dso=cw.battery_registration["Dso"],
+                            electricity_company=energy_provider,
+                            electricity_area=cw.price_zone,
+                            installed_power=cw.battery_charge_peak_ac,
+                            reseller_id=cw.reseller_id,
+                            reporter="CheckWattRank",
+                            historical_data=hd,
+                        )
+                    )
+                    print(f"Result: {status}")
+                    print(f"Count:  {stored_items}/{total_items}")
 
         except Exception as e:
             print(f"An error occurred: {e}")
