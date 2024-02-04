@@ -1,7 +1,5 @@
 """Pulls historical data from CheckWatt EnergyInBalance and push it to CheckWattRank"""
 
-import json
-
 import aiohttp
 
 from pycheckwatt import CheckwattManager
@@ -61,7 +59,6 @@ async def main():
                     "reporter": "CheckWattRank",
                     "historical_data": hd,
                 }
-                print(f"{json.dumps(data, indent=4)}")
 
                 # Post data to Netlify function
                 netlify_function_url = BASE_URL + "/.netlify/functions/publishHistory"
