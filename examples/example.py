@@ -3,11 +3,7 @@
 import argparse
 import json
 
-from dotenv import load_dotenv
-
 from pycheckwatt import CheckwattManager
-
-load_dotenv()
 
 
 async def main(show_details=False):
@@ -22,7 +18,6 @@ async def main(show_details=False):
             if await check_watt_instance.login():
                 # Fetch customer detail
                 await check_watt_instance.get_customer_details()
-                await check_watt_instance.get_battery_peak_data()
 
                 # Do a sample
                 print("Customer Details\n================")
