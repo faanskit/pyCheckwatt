@@ -71,6 +71,7 @@ class CheckwattManager:
         self.display_name = None
         self.reseller_id = None
         self.energy_provider_id = None
+        self.month_peak_effect = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -681,6 +682,39 @@ class CheckwattManager:
                 if response.status == 200:
                     self.spot_prices = await response.json()
                     return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
+    async def get_battery_month_peak_effect(self):
+        """Fetch Price Zone from CheckWatt."""
+        month = datetime.now().strftime("%Y-%m")
+
+        try:
+            endpoint = f"/ems/PeakBoughtMonth?month={month}"
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+
+            # First fetch the revenue
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    peak_data = await response.json()
+                    if "HourPeak" in peak_data:
+                        self.month_peak_effect = peak_data["HourPeak"]
+                        return True
 
                 _LOGGER.error(
                     "Obtaining data from URL %s failed with status code %d",
