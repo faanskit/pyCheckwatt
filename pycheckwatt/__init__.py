@@ -102,6 +102,7 @@ class CheckwattManager:
 
     def _extract_content_and_logbook(self, input_string):
         """Pull the registered information from the logbook."""
+        battery_registration = None
 
         # Define the pattern to match the content between the tags
         pattern = re.compile(
@@ -258,6 +259,7 @@ class CheckwattManager:
                 response.raise_for_status()
                 if response.status == 200:
                     self.customer_details = await response.json()
+                    print(f"{json.dumps(self.customer_details, indent=4)}")
 
                     meters = self.customer_details.get("Meter", [])
                     if meters:
