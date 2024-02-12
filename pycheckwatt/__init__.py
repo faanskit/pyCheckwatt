@@ -152,10 +152,11 @@ class CheckwattManager:
                 if fcrd_percentage is not None:
                     self.fcrd_info = fcrd_percentage
                 elif error_info is not None:
-                    self.fcrd_info = error_info
+                    error_info = error_info.split("]", 1)[0].strip()
+                    self.fcrd_info = error_info.strip("[]").strip()
                 else:
                     self.fcrd_info = None
-            break  # stop so we get the first row in logbook
+                break  # stop so we get the first row in logbook
 
     async def handle_client_error(self, endpoint, headers, error):
         """Handle ClientError and log relevant information."""
@@ -259,7 +260,6 @@ class CheckwattManager:
                 response.raise_for_status()
                 if response.status == 200:
                     self.customer_details = await response.json()
-                    print(f"{json.dumps(self.customer_details, indent=4)}")
 
                     meters = self.customer_details.get("Meter", [])
                     if meters:
