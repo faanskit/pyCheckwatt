@@ -10,7 +10,7 @@ The library is **experimental** and pulls basic info from [EnergyInBalance](http
 Use with care as it loads the servers of CheckWatt
 
 ## Example
-The following example will login to [EnergyInBalance](https://energyinbalance.se/) and retrieve basic information. 
+The following example will login to [EnergyInBalance](https://energyinbalance.se/) and retrieve information. 
 
 Create a file called `example.py` that looks like this:
 ```python
@@ -134,39 +134,57 @@ $ python -m venv venv
 $ ./venv/Scripts/activate
 $ pip install pycheckwatt
 ```
-Run a simple test:
+Run the example code:
 ```
 $ python example.py
 ```
 
 Watch the output:
 ```
+Customer Details
+================
+First name Surname(Street number postal code city)
+
 System
 ======
-First-name Last-name (Address Zip City)
-Solax power T30 12.0 (12.3kW, 12.0kWh)
+Charge peak AC 15.0
+Charge peak DC 15.0
+Discharge peak AC 15.0
+Discharge peak DC 15.0
+Growatt APX 30 kWh/Could not get any information about your battery
+Bixia AB via E.ON Energidistribution AB
+
+Logbook Entries
+===============
+[ FCR-D ACTIVATED ] email@email.com --11111-- 97,5/0,6/96,0 % (15 kW) 2022-01-28 00:03:42 API-BACKEND
+[ FCR-D DEACTIVATE ]  DOWN 50,19 Hz 46,0 %  (15 kW) 2022-01-22 12:00:25 API-BACKEND
+[ FCR-D ACTIVATED ] email@email.com --11111-- 98,2/0,8/97,0 % (15 kW) 2022-01-18 00:02:28 API-BACKEND
+[ FCR-D DEACTIVATE ]  UP 49,84 Hz 0,0 %  (15 kW) 2022-01-09 23:09:03 API-BACKEND
 
 FCR-D
 =====
 FCR-D State: ACTIVATED
-FCR-D Percentage: 99,0/2,9/97,7 %
-FCR-D Date: 2023-12-20 00:11:45
+FCR-D Percentage: 97,5/0,6/96,0 %
+FCR-D Date: 2022-01-28 00:03:42
+
+Revenue
+======
+Daily average:                48  kr
+Month estimate:             1504  kr
+Month revenue:               145  kr
+Year revenue:               4008  kr
+Today revenue:                39  kr
+
+Energy
+======
+Solar: 779.365 kWh
+Charging: 719.286 kWh
+Discharging: 185.699 kWh
+Import: 1684.686 kWh
+Export: 668.539 kWh
+
 ```
 
-## Comprehensive Example
-A comprehensive example can can found in the [examples](https://github.com/faanskit/pyCheckwatt/tree/master/examples) folder. This example use additional modules, such as `dotenv` and `argparse`.
-These modules needs to be installed before the `main.py` is executed.
-
-```bash
-$ python -m venv venv
-$ ./venv/Scripts/activate
-$ pip install pycheckwatt python-dotenv argparse
-```
-
-Run the comprehensive test:
-```
-$ python main.py
-```
 # Acknowledgements
 This module was developed as a team effort by the following contributors.
 
