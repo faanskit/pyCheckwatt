@@ -10,41 +10,122 @@ The library is **experimental** and pulls basic info from [EnergyInBalance](http
 Use with care as it loads the servers of CheckWatt
 
 ## Example
-The following example will login to [EnergyInBalance](https://energyinbalance.se/) and retrieve basic information. 
+The following example will login to [EnergyInBalance](https://energyinbalance.se/) and retrieve information. 
 
 Create a file called `example.py` that looks like this:
 ```python
-"""Example file to test pyCheckwatt"""
-from pycheckwatt import CheckwattManager
-EIB_USERNAME="eib_username"
-EIB_PASSWORD="eib_password"
+"""Test-module for pyCheckwatt."""
 
-async def main():
-    """Test function for pyCheckwatt."""
-    async with CheckwattManager(EIB_USERNAME, EIB_PASSWORD) as cw_instance:
+import argparse
+import json
+
+from pycheckwatt import CheckwattManager
+
+
+async def main(show_details=False):
+    """Fetch username and password from environment variables."""
+    username = ""
+    password = ""
+
+    # Create the async class
+    async with CheckwattManager(username, password) as check_watt_instance:
         try:
-            # Login to EnergyInBalance
-            if await cw_instance.login():
+            # Login to EnergyInBalance and check kill switch
+            if await check_watt_instance.login():
                 # Fetch customer detail
-                await cw_instance.get_customer_details()
-                print("System\n======")
-                print(cw_instance.registered_owner)
-                print(cw_instance.battery_make_and_model)
+                await check_watt_instance.get_customer_details()
+
+                # Do a sample
+                print("Customer Details\n================")
+                print(check_watt_instance.registered_owner)
+
+                print("\nSystem\n======")
+                print("Charge peak AC", check_watt_instance.battery_peak_data[0])
+                print("Charge peak DC", check_watt_instance.battery_peak_data[1])
+                print("Discharge peak AC", check_watt_instance.battery_peak_data[2])
+                print("Discharge peak DC", check_watt_instance.battery_peak_data[3])
+                print(check_watt_instance.battery_make_and_model)
+                print(check_watt_instance.electricity_provider)
+
+                print("\nLogbook Entries\n===============")
+                for entry in check_watt_instance.logbook_entries:
+                    print(entry)
+
+                await check_watt_instance.get_fcrd_today_net_revenue()
+                await check_watt_instance.get_fcrd_year_net_revenue()
+                await check_watt_instance.get_fcrd_month_net_revenue()
                 print("\nFCR-D\n=====")
-                print(f"FCR-D State: {cw_instance.fcrd_state}")
-                print(f"FCR-D Percentage: {cw_instance.fcrd_percentage}")
-                print(f"FCR-D Date: {cw_instance.fcrd_timestamp}")
+                print(f"FCR-D State: {check_watt_instance.fcrd_state}")
+                print(f"FCR-D Percentage: {check_watt_instance.fcrd_info}")
+                print(f"FCR-D Date: {check_watt_instance.fcrd_timestamp}")
+
+                print("\nRevenue\n======")
+                print(
+                    "{:<24}  {:>6}  {:>0}".format(
+                        "Daily average:",
+                        int(check_watt_instance.fcrd_daily_net_average),
+                        "kr",
+                    )
+                )
+                print(
+                    "{:<24}  {:>6}  {:>0}".format(
+                        "Month estimate:",
+                        int(check_watt_instance.fcrd_month_net_estimate),
+                        "kr",
+                    )
+                )
+                print(
+                    "{:<24}  {:>6}  {:>0}".format(
+                        "Month revenue:",
+                        int(check_watt_instance.fcrd_month_net_revenue),
+                        "kr",
+                    )
+                )
+                print(
+                    "{:<24}  {:>6}  {:>0}".format(
+                        "Year revenue:",
+                        int(check_watt_instance.fcrd_year_net_revenue),
+                        "kr",
+                    )
+                )
+                print(
+                    "{:<24}  {:>6}  {:>0}".format(
+                        "Today revenue:",
+                        int(check_watt_instance.fcrd_today_net_revenue),
+                        "kr",
+                    )
+                )
+
+                await check_watt_instance.get_power_data()
+                print("\nEnergy\n======")
+                print(f"Solar: {check_watt_instance.total_solar_energy/1000} kWh")
+                print(f"Charging: {check_watt_instance.total_charging_energy/1000} kWh")
+                print(
+                    f"Discharging: {check_watt_instance.total_discharging_energy/1000} kWh"  # noqa: E501
+                )
+                print(f"Import: {check_watt_instance.total_import_energy/1000} kWh")
+                print(f"Export: {check_watt_instance.total_export_energy/1000} kWh")
+
+                if show_details:
+                    print("\nCustomer Details\n===============")
+                    print(json.dumps(check_watt_instance.customer_details, indent=2))
 
         except Exception as e:
             print(f"An error occurred: {e}")
 
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Checkwatt Information")
+    parser.add_argument(
+        "-d", "--details", action="store_true", help="Show system details"
+    )
+    args = parser.parse_args()
 
     import asyncio
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(main())
+    loop.run_until_complete(main(args.details))
 ```
 
 Create a virtual environment and install pyCheckwatt:
@@ -53,39 +134,57 @@ $ python -m venv venv
 $ ./venv/Scripts/activate
 $ pip install pycheckwatt
 ```
-Run a simple test:
+Run the example code:
 ```
 $ python example.py
 ```
 
 Watch the output:
 ```
+Customer Details
+================
+First name Surname(Street number postal code city)
+
 System
 ======
-First-name Last-name (Address Zip City)
-Solax power T30 12.0 (12.3kW, 12.0kWh)
+Charge peak AC 15.0
+Charge peak DC 15.0
+Discharge peak AC 15.0
+Discharge peak DC 15.0
+Growatt APX 30 kWh/Could not get any information about your battery
+Bixia AB via E.ON Energidistribution AB
+
+Logbook Entries
+===============
+[ FCR-D ACTIVATED ] email@email.com --11111-- 97,5/0,6/96,0 % (15 kW) 2022-01-28 00:03:42 API-BACKEND
+[ FCR-D DEACTIVATE ]  DOWN 50,19 Hz 46,0 %  (15 kW) 2022-01-22 12:00:25 API-BACKEND
+[ FCR-D ACTIVATED ] email@email.com --11111-- 98,2/0,8/97,0 % (15 kW) 2022-01-18 00:02:28 API-BACKEND
+[ FCR-D DEACTIVATE ]  UP 49,84 Hz 0,0 %  (15 kW) 2022-01-09 23:09:03 API-BACKEND
 
 FCR-D
 =====
 FCR-D State: ACTIVATED
-FCR-D Percentage: 99,0/2,9/97,7 %
-FCR-D Date: 2023-12-20 00:11:45
+FCR-D Percentage: 97,5/0,6/96,0 %
+FCR-D Date: 2022-01-28 00:03:42
+
+Revenue
+======
+Daily average:                48  kr
+Month estimate:             1504  kr
+Month revenue:               145  kr
+Year revenue:               4008  kr
+Today revenue:                39  kr
+
+Energy
+======
+Solar: 779.365 kWh
+Charging: 719.286 kWh
+Discharging: 185.699 kWh
+Import: 1684.686 kWh
+Export: 668.539 kWh
+
 ```
 
-## Comprehensive Example
-A comprehensive example can can found in the [examples](https://github.com/faanskit/pyCheckwatt/tree/master/examples) folder. This example use additional modules, such as `dotenv` and `argparse`.
-These modules needs to be installed before the `main.py` is executed.
-
-```bash
-$ python -m venv venv
-$ ./venv/Scripts/activate
-$ pip install pycheckwatt python-dotenv argparse
-```
-
-Run the comprehensive test:
-```
-$ python main.py
-```
 # Acknowledgements
 This module was developed as a team effort by the following contributors.
 
