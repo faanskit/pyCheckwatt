@@ -58,8 +58,13 @@ class CheckwattManager:
         self.battery_discharge_peak_ac = None
         self.battery_discharge_peak_dc = None
         self.logbook_entries = None
+        self.comments = None
         self.fcrd_state = None
         self.fcrd_info = None
+        self.fcrd_percentage_up = None
+        self.fcrd_percentage_response = None
+        self.fcrd_percentage_down = None
+        self.fcrd_power = None
         self.fcrd_timestamp = None
         self.power_data = None
         self.price_zone = None
@@ -72,6 +77,7 @@ class CheckwattManager:
         self.reseller_id = None
         self.energy_provider_id = None
         self.month_peak_effect = None
+        self.ems = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -136,19 +142,35 @@ class CheckwattManager:
 
     def _extract_fcr_d_state(self):
         pattern = re.compile(
-            r"\[ FCR-D (ACTIVATED|DEACTIVATE|FAIL ACTIVATION) \](?:.*?(\d+,\d+/\d+,\d+/\d+,\d+ %))?(?:\s*(.*?))?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"  # noqa: E501
+            r"\[ FCR-D (ACTIVATED|DEACTIVATE|FAIL ACTIVATION) \] (\S+) --(\d+)-- ((\d+,\d+)/(\d+,\d+)/(\d+,\d+) %) \((\d+) kW\) (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"  # noqa: E501
         )
         for entry in self.logbook_entries:
             match = pattern.search(entry)
             if match:
                 self.fcrd_state = match.group(1)
                 fcrd_percentage = (
-                    match.group(2)
+                    match.group(4)
                     if self.fcrd_state in ["ACTIVATED", "FAIL ACTIVATION"]
                     else None
                 )
-                error_info = match.group(3) if self.fcrd_state == "DEACTIVATE" else None
-                self.fcrd_timestamp = match.group(4)
+                self.fcrd_percentage_up = (
+                    match.group(5)
+                    if self.fcrd_state in ["ACTIVATED", "FAIL ACTIVATION"]
+                    else None
+                )
+                self.fcrd_percentage_response = (
+                    match.group(6)
+                    if self.fcrd_state in ["ACTIVATED", "FAIL ACTIVATION"]
+                    else None
+                )
+                self.fcrd_percentage_down = (
+                    match.group(7)
+                    if self.fcrd_state in ["ACTIVATED", "FAIL ACTIVATION"]
+                    else None
+                )
+                error_info = match.group(4) if self.fcrd_state == "DEACTIVATE" else None
+                self.fcrd_power = match.group(8)
+                self.fcrd_timestamp = match.group(9)
                 if fcrd_percentage is not None:
                     self.fcrd_info = fcrd_percentage
                 elif error_info is not None:
@@ -279,7 +301,7 @@ class CheckwattManager:
                         self.display_name = soc_meter.get("DisplayName")
                         self.reseller_id = soc_meter.get("ResellerId")
                         self.energy_provider_id = soc_meter.get("ElhandelsbolagId")
-
+                        self.comments = soc_meter.get("Comments")
                         logbook = soc_meter.get("Logbook")
                         if logbook:
                             (
@@ -334,7 +356,6 @@ class CheckwattManager:
         try:
             from_date = datetime.now().strftime("%Y-%m-01")
             to_date = datetime.now() + timedelta(days=1)
-            #            to_date = datetime.now()
             to_date = to_date.strftime("%Y-%m-%d")
             lastday_date = datetime.now() + relativedelta(months=1)
             lastday_date = datetime(
@@ -346,7 +367,6 @@ class CheckwattManager:
             lastday = lastday_date.strftime("%d")
 
             dayssofar = datetime.now()
-            #            dayssofar = datetime.now() + timedelta(days=1)
             dayssofar = dayssofar.strftime("%d")
 
             daysleft = int(lastday) - int(dayssofar)
@@ -630,6 +650,40 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
+    async def get_ems_settings(self, rpi_serial=None):
+        """Fetch EMS settings from CheckWatt."""
+
+        try:
+            if rpi_serial is None:
+                rpi_serial = self.rpi_serial
+
+            endpoint = f"/ems/service/Pending?Serial={rpi_serial}"
+
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+
+            # Fetch Energy Flows
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    self.ems = await response.json()
+                    return True
+
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
     async def get_price_zone(self):
         """Fetch Price Zone from CheckWatt."""
 
@@ -821,6 +875,18 @@ class CheckwattManager:
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, "", error)
+
+    @property
+    def ems_settings(self):
+        """Property for inverter make and model. Not used by HA integration.."""
+        ems = f"{self.ems[0]}"
+        if ems == "fcrd":
+            resp = "Currently optimized (CO)"
+        elif ems == "sc":
+            resp = "Self Consumption (SC)"
+        else:
+            resp = "Please report this on Github " + ems
+        return resp
 
     @property
     def inverter_make_and_model(self):
