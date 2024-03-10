@@ -43,9 +43,15 @@ async def main(show_details=False):
                 await check_watt_instance.get_fcrd_month_net_revenue()
                 print("\nFCR-D\n=====")
                 print(f"FCR-D State: {check_watt_instance.fcrd_state}")
-                print(f"FCR-D Discharge: {check_watt_instance.fcrd_percentage_up}% of {check_watt_instance.fcrd_power}kW")
-                print(f"FCR-D Charge: {check_watt_instance.fcrd_percentage_down}% of {check_watt_instance.fcrd_power}kW")
-                print(f"FCR-D Response: {check_watt_instance.fcrd_percentage_response} seconds")
+                print(
+                    f"FCR-D Discharge: {check_watt_instance.fcrd_percentage_up}% of {check_watt_instance.fcrd_power}kW"
+                )
+                print(
+                    f"FCR-D Charge: {check_watt_instance.fcrd_percentage_down}% of {check_watt_instance.fcrd_power}kW"
+                )
+                print(
+                    f"FCR-D Response: {check_watt_instance.fcrd_percentage_response} seconds"
+                )
                 print(f"FCR-D Date: {check_watt_instance.fcrd_timestamp}")
 
                 print("\nRevenue\n=======")
@@ -84,7 +90,6 @@ async def main(show_details=False):
                         "kr",
                     )
                 )
-
 
                 await check_watt_instance.get_ems_settings()
                 print("\nEMS Setting\n===========")
