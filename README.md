@@ -14,7 +14,7 @@ The following example will login to [EnergyInBalance](https://energyinbalance.se
 
 Create a file called `example.py` that looks like this:
 ```python
-"""Test-module for pyCheckwatt."""
+"""Example-module for pyCheckwatt."""
 
 import argparse
 import json
@@ -24,8 +24,8 @@ from pycheckwatt import CheckwattManager
 
 async def main(show_details=False):
     """Fetch username and password from environment variables."""
-    username = ""
-    password = ""
+    username = "EIB username"
+    password = "EiB password"
 
     # Create the async class
     async with CheckwattManager(username, password) as check_watt_instance:
@@ -51,15 +51,20 @@ async def main(show_details=False):
                 for entry in check_watt_instance.logbook_entries:
                     print(entry)
 
+                print("\nComments\n========")
+                print(check_watt_instance.comments)
+
                 await check_watt_instance.get_fcrd_today_net_revenue()
                 await check_watt_instance.get_fcrd_year_net_revenue()
                 await check_watt_instance.get_fcrd_month_net_revenue()
                 print("\nFCR-D\n=====")
                 print(f"FCR-D State: {check_watt_instance.fcrd_state}")
-                print(f"FCR-D Percentage: {check_watt_instance.fcrd_info}")
+                print(f"FCR-D Discharge: {check_watt_instance.fcrd_percentage_up}% of {check_watt_instance.fcrd_power}kW")
+                print(f"FCR-D Charge: {check_watt_instance.fcrd_percentage_down}% of {check_watt_instance.fcrd_power}kW")
+                print(f"FCR-D Response: {check_watt_instance.fcrd_percentage_response} seconds")
                 print(f"FCR-D Date: {check_watt_instance.fcrd_timestamp}")
 
-                print("\nRevenue\n======")
+                print("\nRevenue\n=======")
                 print(
                     "{:<24}  {:>6}  {:>0}".format(
                         "Daily average:",
@@ -96,6 +101,11 @@ async def main(show_details=False):
                     )
                 )
 
+
+                await check_watt_instance.get_ems_settings()
+                print("\nEMS Setting\n===========")
+                print(check_watt_instance.ems_settings)
+
                 await check_watt_instance.get_power_data()
                 print("\nEnergy\n======")
                 print(f"Solar: {check_watt_instance.total_solar_energy/1000} kWh")
@@ -126,6 +136,7 @@ if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(main(args.details))
+
 ```
 
 Create a virtual environment and install pyCheckwatt:
@@ -161,19 +172,30 @@ Logbook Entries
 [ FCR-D ACTIVATED ] email@email.com --11111-- 98,2/0,8/97,0 % (15 kW) 2022-01-18 00:02:28 API-BACKEND
 [ FCR-D DEACTIVATE ]  UP 49,84 Hz 0,0 %  (15 kW) 2022-01-09 23:09:03 API-BACKEND
 
-FCR-D
-=====
-FCR-D State: ACTIVATED
-FCR-D Percentage: 97,5/0,6/96,0 %
-FCR-D Date: 2022-01-28 00:03:42
+Comments
+========
+Kund har utökat till 20 kWh / 20 kW.
+
+System
+======
+Charge peak AC 15.0
+Charge peak DC 15.0
+Discharge peak AC 15.0
+Discharge peak DC 15.0
+Could not get any information about your battery
+Bixia AB via E.ON Energidistribution AB
 
 Revenue
-======
+=======
 Daily average:                48  kr
 Month estimate:             1504  kr
 Month revenue:               145  kr
 Year revenue:               4008  kr
 Today revenue:                39  kr
+
+EMS Setting
+===========
+Currently optimized (CO)
 
 Energy
 ======
