@@ -882,6 +882,8 @@ class CheckwattManager:
         ems = f"{self.ems[0]}"
         if ems == "fcrd":
             resp = "Currently optimized (CO)"
+        elif ems == "sc":
+            resp = "Self Consumption (SC)"
         else:
             resp = "Please report this on Github " + ems
         return resp
