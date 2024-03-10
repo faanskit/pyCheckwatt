@@ -143,7 +143,6 @@ class CheckwattManager:
     def _extract_fcr_d_state(self):
         pattern = re.compile(
             r"\[ FCR-D (ACTIVATED|DEACTIVATE|FAIL ACTIVATION) \] (\S+) --(\d+)-- ((\d+,\d+)/(\d+,\d+)/(\d+,\d+) %) \((\d+) kW\) (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"  # noqa: E501
-
         )
         for entry in self.logbook_entries:
             match = pattern.search(entry)
@@ -651,7 +650,6 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
 
-
     async def get_ems_settings(self, rpi_serial=None):
         """Fetch EMS settings from CheckWatt."""
 
@@ -685,8 +683,6 @@ class CheckwattManager:
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
-
-
 
     async def get_price_zone(self):
         """Fetch Price Zone from CheckWatt."""
@@ -887,7 +883,7 @@ class CheckwattManager:
         if ems == "fcrd":
             resp = "Currently optimized (CO)"
         else:
-            resp = "Please report this on Github "+ems
+            resp = "Please report this on Github " + ems
         return resp
 
     @property
