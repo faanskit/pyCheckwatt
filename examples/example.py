@@ -44,13 +44,13 @@ async def main(show_details=False):
                 print("\nFCR-D\n=====")
                 print(f"FCR-D State: {check_watt_instance.fcrd_state}")
                 print(
-                    f"FCR-D Discharge: {check_watt_instance.fcrd_percentage_up}% of {check_watt_instance.fcrd_power}kW"
+                    f"FCR-D Discharge: {check_watt_instance.fcrd_percentage_up}% of {check_watt_instance.fcrd_power}kW"  # noqa: E501
                 )
                 print(
-                    f"FCR-D Charge: {check_watt_instance.fcrd_percentage_down}% of {check_watt_instance.fcrd_power}kW"
+                    f"FCR-D Charge: {check_watt_instance.fcrd_percentage_down}% of {check_watt_instance.fcrd_power}kW"  # noqa: E501
                 )
                 print(
-                    f"FCR-D Response: {check_watt_instance.fcrd_percentage_response} seconds"
+                    f"FCR-D Response: {check_watt_instance.fcrd_percentage_response} seconds"  # noqa: E501
                 )
                 print(f"FCR-D Date: {check_watt_instance.fcrd_timestamp}")
 
