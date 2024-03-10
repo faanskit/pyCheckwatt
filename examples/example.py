@@ -1,4 +1,4 @@
-"""Test-module for pyCheckwatt."""
+"""Example-module for pyCheckwatt."""
 
 import argparse
 import json
@@ -8,8 +8,8 @@ from pycheckwatt import CheckwattManager
 
 async def main(show_details=False):
     """Fetch username and password from environment variables."""
-    username = ""
-    password = ""
+    username = "EIB username"
+    password = "EiB password"
 
     # Create the async class
     async with CheckwattManager(username, password) as check_watt_instance:
@@ -35,15 +35,20 @@ async def main(show_details=False):
                 for entry in check_watt_instance.logbook_entries:
                     print(entry)
 
+                print("\nComments\n========")
+                print(check_watt_instance.comments)
+
                 await check_watt_instance.get_fcrd_today_net_revenue()
                 await check_watt_instance.get_fcrd_year_net_revenue()
                 await check_watt_instance.get_fcrd_month_net_revenue()
                 print("\nFCR-D\n=====")
                 print(f"FCR-D State: {check_watt_instance.fcrd_state}")
-                print(f"FCR-D Percentage: {check_watt_instance.fcrd_info}")
+                print(f"FCR-D Discharge: {check_watt_instance.fcrd_percentage_up}% of {check_watt_instance.fcrd_power}kW")
+                print(f"FCR-D Charge: {check_watt_instance.fcrd_percentage_down}% of {check_watt_instance.fcrd_power}kW")
+                print(f"FCR-D Response: {check_watt_instance.fcrd_percentage_response} seconds")
                 print(f"FCR-D Date: {check_watt_instance.fcrd_timestamp}")
 
-                print("\nRevenue\n======")
+                print("\nRevenue\n=======")
                 print(
                     "{:<24}  {:>6}  {:>0}".format(
                         "Daily average:",
@@ -79,6 +84,11 @@ async def main(show_details=False):
                         "kr",
                     )
                 )
+
+
+                await check_watt_instance.get_ems_settings()
+                print("\nEMS Setting\n===========")
+                print(check_watt_instance.ems_settings)
 
                 await check_watt_instance.get_power_data()
                 print("\nEnergy\n======")
