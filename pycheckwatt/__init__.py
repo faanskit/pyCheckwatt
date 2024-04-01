@@ -390,7 +390,10 @@ class CheckwattManager:
                         misseddays += 1
                 dayswithmoney = int(dayssofar) - int(misseddays)
                 if response.status == 200:
-                    self.dailyaverage = self.revenuemonth / int(dayswithmoney)
+                    if dayswithmoney > 0:
+                        self.dailyaverage = self.revenuemonth / int(dayswithmoney)
+                    else:
+                        self.dailyaverage = 0
                     self.monthestimate = (
                         self.dailyaverage * daysleft
                     ) + self.revenuemonth
