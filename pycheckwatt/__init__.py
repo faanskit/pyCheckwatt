@@ -248,7 +248,10 @@ class CheckwattManager:
 
             timeout_seconds = 10
             async with self.session.post(
-                self.base_url + endpoint, headers=headers, json=payload, timeout=timeout_seconds
+                self.base_url + endpoint,
+                headers=headers,
+                json=payload,
+                timeout=timeout_seconds,
             ) as response:
                 data = await response.json()
                 if response.status == 200:
