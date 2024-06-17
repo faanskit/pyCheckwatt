@@ -236,16 +236,22 @@ class CheckwattManager:
             encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
                 "utf-8"
             )
-            endpoint = "/user/LoginEiB?audience=eib"
-
+            endpoint = "/user/Login?audience=eib"
             # Define headers with the encoded credentials
             headers = {
                 **self._get_headers(),
                 "authorization": f"Basic {encoded_credentials}",
             }
+            payload = {
+                "OneTimePassword": "",
+            }
 
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
+            timeout_seconds = 10
+            async with self.session.post(
+                self.base_url + endpoint,
+                headers=headers,
+                json=payload,
+                timeout=timeout_seconds,
             ) as response:
                 data = await response.json()
                 if response.status == 200:
