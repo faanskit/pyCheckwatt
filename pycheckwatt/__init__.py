@@ -40,7 +40,7 @@ class CheckwattManager:
         if username is None or password is None:
             raise ValueError("Username and password must be provided.")
         self.session = None
-        self.base_url = "https://services.cnet.se/checkwattapi/v2"
+        self.base_url = "https://api.checkwatt.se"
         self.username = username
         self.password = password
         self.dailyaverage = 0
