@@ -78,6 +78,7 @@ class CheckwattManager:
         self.energy_provider_id = None
         self.month_peak_effect = None
         self.ems = None
+        self.site_id = None
 
     async def __aenter__(self):
         """Asynchronous enter."""
@@ -355,11 +356,58 @@ class CheckwattManager:
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
-
+        
+    async def get_site_id(self):
+        """Get site ID from RPI serial number."""
+        if self.site_id is not None:
+            return self.site_id
+            
+        if self.rpi_serial is None:
+            raise ValueError("RPI serial not available. Call get_customer_details() first.")
+            
+        try:
+            endpoint = f"/Site/SiteIdBySerial?serial={self.rpi_serial}"
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Bearer {self.jwt_token}",
+            }
+            
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                response.raise_for_status()
+                if response.status == 200:
+                    raw_response = await response.text()
+                    print(f"Raw response: {raw_response}")
+                    print(f"Response type: {type(raw_response)}")
+                    
+                    try:
+                        response_data = json.loads(raw_response)
+                        print(f"Parsed JSON: {response_data}")
+                        print(f"JSON type: {type(response_data)}")
+                        self.site_id = str(response_data["SiteId"])
+                        return self.site_id
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error: {e}")
+                        # Fallback - maybe it's just the number as a string
+                        self.site_id = raw_response.strip('"')
+                        return self.site_id
+                    
+                _LOGGER.error(
+                    "Obtaining data from URL %s failed with status code %d",
+                    self.base_url + endpoint,
+                    response.status,
+                )
+                return False
+                
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+        
     async def get_fcrd_month_net_revenue(self):
         """Fetch FCR-D revenues from CheckWatt."""
         misseddays = 0
         try:
+            site_id = await self.get_site_id()
             from_date = datetime.now().strftime("%Y-%m-01")
             to_date = datetime.now() + timedelta(days=1)
             to_date = to_date.strftime("%Y-%m-%d")
@@ -376,7 +424,7 @@ class CheckwattManager:
             dayssofar = dayssofar.strftime("%d")
 
             daysleft = int(lastday) - int(dayssofar)
-            endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"
+            endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day" 
 
             # Define headers with the JwtToken
             headers = {
@@ -390,7 +438,7 @@ class CheckwattManager:
             ) as response:
                 response.raise_for_status()
                 revenue = await response.json()
-                for each in revenue:
+                for each in revenue["Revenue"]:
                     self.revenuemonth += each["NetRevenue"]
                     if each["NetRevenue"] == 0:
                         misseddays += 1
@@ -418,11 +466,12 @@ class CheckwattManager:
     async def get_fcrd_today_net_revenue(self):
         """Fetch FCR-D revenues from CheckWatt."""
         try:
+            site_id = await self.get_site_id()
             from_date = datetime.now().strftime("%Y-%m-%d")
             end_date = datetime.now() + timedelta(days=2)
             to_date = end_date.strftime("%Y-%m-%d")
 
-            endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"
+            endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day" 
 
             # Define headers with the JwtToken
             headers = {
@@ -450,6 +499,7 @@ class CheckwattManager:
 
     async def get_fcrd_year_net_revenue(self):
         """Fetch FCR-D revenues from CheckWatt."""
+        site_id = await self.get_site_id()
         yesterday_date = datetime.now() + timedelta(days=1)
         yesterday_date = yesterday_date.strftime("-%m-%d")
         months = ["-01-01", "-06-30", "-07-01", yesterday_date]
@@ -460,7 +510,7 @@ class CheckwattManager:
                 year_date = datetime.now().strftime("%Y")
                 to_date = year_date + yesterday_date
                 from_date = year_date + "-01-01"
-                endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"
+                endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day" 
                 # Define headers with the JwtToken
                 headers = {
                     **self._get_headers(),
@@ -472,7 +522,7 @@ class CheckwattManager:
                 ) as responseyear:  # noqa: E501
                     responseyear.raise_for_status()
                     self.revenueyear = await responseyear.json()
-                    for each in self.revenueyear:
+                    for each in self.revenueyear["Revenue"]:
                         self.revenueyeartotal += each["NetRevenue"]
                     if responseyear.status == 200:
                         retval = True
@@ -492,7 +542,7 @@ class CheckwattManager:
                     year_date = datetime.now().strftime("%Y")
                     to_date = year_date + months[loop + 1]
                     from_date = year_date + months[loop]
-                    endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"  # noqa: E501
+                    endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day" 
                     # Define headers with the JwtToken
                     headers = {
                         **self._get_headers(),
@@ -504,7 +554,7 @@ class CheckwattManager:
                     ) as responseyear:  # noqa: E501
                         responseyear.raise_for_status()
                         self.revenueyear = await responseyear.json()
-                        for each in self.revenueyear:
+                        for each in self.revenueyear["Revenue"]:
                             self.revenueyeartotal += each["NetRevenue"]
                         if responseyear.status == 200:
                             loop += 2
@@ -523,6 +573,7 @@ class CheckwattManager:
     async def fetch_and_return_net_revenue(self, from_date, to_date):
         """Fetch FCR-D revenues from CheckWatt as per provided range."""
         try:
+            site_id = await self.get_site_id()
             # Validate date format and ensure they are dates
             date_format = "%Y-%m-%d"
             try:
@@ -553,7 +604,7 @@ class CheckwattManager:
             # Extend to_date by one day
             to_date += timedelta(days=1)
 
-            endpoint = f"/ems/revenue?fromDate={from_date}&toDate={to_date}"
+            endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day" 
 
             # Define headers with the JwtToken
             headers = {
@@ -1011,7 +1062,7 @@ class CheckwattManager:
         """Property for today's revenue."""
         revenue = 0
         if self.revenue is not None:
-            if len(self.revenue) > 0:
+            if len(self.revenue["Revenue"]) > 0:
                 if "NetRevenue" in self.revenue[0]:
                     revenue = self.revenue[0]["NetRevenue"]
 
@@ -1022,9 +1073,9 @@ class CheckwattManager:
         """Property for tomorrow's revenue."""
         revenue = 0
         if self.revenue is not None:
-            if len(self.revenue) > 1:
-                if "NetRevenue" in self.revenue[1]:
-                    revenue = self.revenue[1]["NetRevenue"]
+            if len(self.revenue["Revenue"]) > 1:
+                if "NetRevenue" in self.revenue["Revenue"][1]:
+                    revenue = self.revenue["Revenue"][1]["NetRevenue"]
 
         return revenue
 
@@ -1215,7 +1266,6 @@ class CheckwattManager:
 
         _LOGGER.warning("Unable to find Meter Data for Meter Version")
         return None
-
 
 class CheckWattRankManager:
     def __init__(self) -> None:
