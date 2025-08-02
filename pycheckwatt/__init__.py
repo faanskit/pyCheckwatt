@@ -356,22 +356,24 @@ class CheckwattManager:
 
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
-        
+
     async def get_site_id(self):
         """Get site ID from RPI serial number."""
         if self.site_id is not None:
             return self.site_id
-            
+
         if self.rpi_serial is None:
-            raise ValueError("RPI serial not available. Call get_customer_details() first.")
-            
+            raise ValueError(
+                "RPI serial not available. Call get_customer_details() first."
+            )
+
         try:
             endpoint = f"/Site/SiteIdBySerial?serial={self.rpi_serial}"
             headers = {
                 **self._get_headers(),
                 "authorization": f"Bearer {self.jwt_token}",
             }
-            
+
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
             ) as response:
@@ -380,7 +382,7 @@ class CheckwattManager:
                     raw_response = await response.text()
                     print(f"Raw response: {raw_response}")
                     print(f"Response type: {type(raw_response)}")
-                    
+
                     try:
                         response_data = json.loads(raw_response)
                         print(f"Parsed JSON: {response_data}")
@@ -392,17 +394,17 @@ class CheckwattManager:
                         # Fallback - maybe it's just the number as a string
                         self.site_id = raw_response.strip('"')
                         return self.site_id
-                    
+
                 _LOGGER.error(
                     "Obtaining data from URL %s failed with status code %d",
                     self.base_url + endpoint,
                     response.status,
                 )
                 return False
-                
+
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
-        
+
     async def get_fcrd_month_net_revenue(self):
         """Fetch FCR-D revenues from CheckWatt."""
         misseddays = 0
@@ -424,7 +426,9 @@ class CheckwattManager:
             dayssofar = dayssofar.strftime("%d")
 
             daysleft = int(lastday) - int(dayssofar)
-            endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day" 
+            endpoint = (
+                f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+            )
 
             # Define headers with the JwtToken
             headers = {
@@ -471,7 +475,9 @@ class CheckwattManager:
             end_date = datetime.now() + timedelta(days=2)
             to_date = end_date.strftime("%Y-%m-%d")
 
-            endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day" 
+            endpoint = (
+                f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+            )
 
             # Define headers with the JwtToken
             headers = {
@@ -510,7 +516,9 @@ class CheckwattManager:
                 year_date = datetime.now().strftime("%Y")
                 to_date = year_date + yesterday_date
                 from_date = year_date + "-01-01"
-                endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day" 
+                endpoint = (
+                    f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+                )
                 # Define headers with the JwtToken
                 headers = {
                     **self._get_headers(),
@@ -542,7 +550,7 @@ class CheckwattManager:
                     year_date = datetime.now().strftime("%Y")
                     to_date = year_date + months[loop + 1]
                     from_date = year_date + months[loop]
-                    endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day" 
+                    endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
                     # Define headers with the JwtToken
                     headers = {
                         **self._get_headers(),
@@ -604,7 +612,9 @@ class CheckwattManager:
             # Extend to_date by one day
             to_date += timedelta(days=1)
 
-            endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day" 
+            endpoint = (
+                f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+            )
 
             # Define headers with the JwtToken
             headers = {
@@ -1266,6 +1276,7 @@ class CheckwattManager:
 
         _LOGGER.warning("Unable to find Meter Data for Meter Version")
         return None
+
 
 class CheckWattRankManager:
     def __init__(self) -> None:
