@@ -1,0 +1,12 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+# Dependencies
+RUN pip install aiohttp python-dateutil
+
+# Dev dependencies
+RUN pip install black flake8
+
+ENV PYTHONPATH="${PYTHONPATH}:/app"
+
+CMD ["python"]

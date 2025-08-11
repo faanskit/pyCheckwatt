@@ -207,6 +207,39 @@ Export: 668.539 kWh
 
 ```
 
+## Docker Development
+
+For developers who prefer not to install Python locally, a Docker-based development environment is available.
+
+### Prerequisites
+
+- Docker and Docker Compose installed
+- CheckWatt EnergyInBalance credentials
+
+### Quick Start
+
+1. **Set up credentials**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your CheckWatt credentials
+   ```
+
+2. **Build, run & cleanup**
+   ```bash
+   # Build the development container
+   docker compose -f docker-compose.dev.yml build
+   
+   # Run the example
+   docker compose -f docker-compose.dev.yml run --rm pycheckwatt-dev python examples/example.py
+   
+   # Clean up containers
+   docker compose -f docker-compose.dev.yml down
+   ```
+
+Inside the container local code changes are automatically synced and you can run standard Python development commands.
+
+
+
 # Acknowledgements
 This module was developed as a team effort by the following contributors.
 
