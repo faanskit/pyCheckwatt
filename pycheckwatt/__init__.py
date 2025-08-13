@@ -213,6 +213,13 @@ class CheckwattManager:
                     )
                     return False
 
+                if response.status == 404:
+                    # We are OK to continue since the killswitch file does not exist
+                    _LOGGER.debug(
+                        "CheckWatt accepted and not enabled the kill-switch since file does not exist"
+                    )
+                    return True
+
                 if response.status == 401:
                     _LOGGER.error(
                         "Unauthorized: Check your CheckWatt authentication credentials"
