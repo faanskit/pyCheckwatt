@@ -380,17 +380,12 @@ class CheckwattManager:
                 response.raise_for_status()
                 if response.status == 200:
                     raw_response = await response.text()
-                    print(f"Raw response: {raw_response}")
-                    print(f"Response type: {type(raw_response)}")
 
                     try:
                         response_data = json.loads(raw_response)
-                        print(f"Parsed JSON: {response_data}")
-                        print(f"JSON type: {type(response_data)}")
                         self.site_id = str(response_data["SiteId"])
                         return self.site_id
                     except json.JSONDecodeError as e:
-                        print(f"JSON decode error: {e}")
                         # Fallback - maybe it's just the number as a string
                         self.site_id = raw_response.strip('"')
                         return self.site_id
