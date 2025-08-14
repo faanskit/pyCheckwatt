@@ -2,14 +2,14 @@
 
 import argparse
 import json
+import os
 
 from pycheckwatt import CheckwattManager
 
 
 async def main(show_details=False):
-    """Fetch username and password from environment variables."""
-    username = "EIB username"
-    password = "EiB password"
+    username = os.getenv("CHECKWATT_USERNAME")
+    password = os.getenv("CHECKWATT_PASSWORD")
 
     # Create the async class
     async with CheckwattManager(username, password) as check_watt_instance:

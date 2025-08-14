@@ -1,0 +1,18 @@
+services:
+  pycheckwatt-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - pip-cache:/root/.cache/pip
+    environment:
+      - CHECKWATT_USERNAME=${CHECKWATT_USERNAME:-}
+      - CHECKWATT_PASSWORD=${CHECKWATT_PASSWORD:-}
+      - PYTHONPATH=/app
+    stdin_open: true
+    tty: true
+    working_dir: /app
+
+volumes:
+  pip-cache:
