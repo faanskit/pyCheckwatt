@@ -232,6 +232,9 @@ For developers who prefer not to install Python locally, a Docker-based developm
    # Run the example
    docker compose -f docker-compose.dev.yml run --rm pycheckwatt-dev python examples/example.py
    
+   # Run the tests
+   docker compose -f docker-compose.dev.yml run --rm pycheckwatt-dev pytest
+
    # Clean up containers
    docker compose -f docker-compose.dev.yml down
    ```
