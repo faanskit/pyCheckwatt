@@ -20,11 +20,15 @@ Example:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
+import random
 import re
 from datetime import date, datetime, timedelta
+from email.utils import parsedate_to_datetime
+from typing import Any, Dict, Optional, Union
 
 from aiohttp import ClientError, ClientResponseError, ClientSession
 from dateutil.relativedelta import relativedelta
@@ -35,22 +39,54 @@ _LOGGER = logging.getLogger(__name__)
 class CheckwattManager:
     """CheckWatt manager."""
 
-    def __init__(self, username, password, application="pyCheckwatt") -> None:
+    def __init__(
+        self, 
+        username, 
+        password, 
+        application="pyCheckwatt",
+        *,
+        max_retries_429: int = 3,
+        backoff_base: float = 0.5,
+        backoff_factor: float = 2.0,
+        backoff_max: float = 30.0,
+        clock_skew_seconds: int = 10,
+        max_concurrent_requests: int = 5
+    ) -> None:
         """Initialize the CheckWatt manager."""
         if username is None or password is None:
             raise ValueError("Username and password must be provided.")
+        
+        # Core session and configuration
         self.session = None
         self.base_url = "https://api.checkwatt.se"
         self.username = username
         self.password = password
+        self.header_identifier = application
+        
+        # Authentication state
+        self.jwt_token = None
+        self.refresh_token = None
+        self.refresh_token_expires = None
+        
+        # Concurrency control
+        self._auth_lock = asyncio.Lock()
+        self._req_semaphore = asyncio.Semaphore(max_concurrent_requests)
+        
+        # Configuration knobs
+        self.max_retries_429 = max_retries_429
+        self.backoff_base = backoff_base
+        self.backoff_factor = backoff_factor
+        self.backoff_max = backoff_max
+        self.clock_skew_seconds = clock_skew_seconds
+        self.max_concurrent_requests = max_concurrent_requests
+        
+        # Data properties (existing)
         self.dailyaverage = 0
         self.monthestimate = 0
         self.revenue = None
         self.revenueyear = None
         self.revenueyeartotal = 0
         self.revenuemonth = 0
-        self.jwt_token = None
-        self.refresh_token = None
         self.customer_details = None
         self.battery_registration = None
         self.battery_charge_peak_ac = None
@@ -70,7 +106,6 @@ class CheckwattManager:
         self.price_zone = None
         self.spot_prices = None
         self.energy_data = None
-        self.header_identifier = application
         self.rpi_data = None
         self.meter_data = None
         self.display_name = None
@@ -106,6 +141,720 @@ class CheckwattManager:
             "wslog-platform": "controlpanel",
             "X-pyCheckwatt-Application": self.header_identifier,
         }
+
+    def _jwt_is_valid(self) -> bool:
+        """Check if JWT token is valid and not expiring soon."""
+        if not self.jwt_token:
+            return False
+        
+        try:
+            # Simple JWT expiration check - decode the payload part
+            parts = self.jwt_token.split('.')
+            if len(parts) != 3:
+                return False
+            
+            # Decode the payload (second part)
+            payload = base64.urlsafe_b64decode(parts[1] + '==').decode('utf-8')
+            claims = json.loads(payload)
+            
+            exp = claims.get('exp')
+            if not exp:
+                return False
+            
+            # Check if token expires within clock skew
+            now = datetime.utcnow().timestamp()
+            return now < (exp - self.clock_skew_seconds)
+            
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
+            # If we can't decode, treat as unknown validity
+            return False
+
+    def _refresh_is_valid(self) -> bool:
+        """Check if refresh token is valid and not expired."""
+        if not self.refresh_token or not self.refresh_token_expires:
+            return False
+        
+        try:
+            # Parse the expiration timestamp
+            expires = datetime.fromisoformat(self.refresh_token_expires.replace('Z', '+00:00'))
+            now = datetime.now(expires.tzinfo) if expires.tzinfo else datetime.utcnow()
+            
+            # Add some buffer (5 minutes) to avoid edge cases
+            return now < (expires - timedelta(minutes=5))
+            
+        except (ValueError, TypeError):
+            # If we can't parse, treat as unknown validity
+            return False
+
+    async def _refresh(self) -> bool:
+        """Refresh the JWT token using the refresh token."""
+        if not self.refresh_token:
+            return False
+        
+        try:
+            endpoint = "/user/RefreshToken?audience=eib"
+            headers = {
+                **self._get_headers(),
+                "authorization": f"RefreshToken {self.refresh_token}",
+            }
+            
+            async with self.session.get(
+                self.base_url + endpoint, 
+                headers=headers,
+                timeout=10
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    
+                    # Update tokens
+                    self.jwt_token = data.get("JwtToken")
+                    if "RefreshToken" in data:
+                        self.refresh_token = data.get("RefreshToken")
+                    if "RefreshTokenExpires" in data:
+                        self.refresh_token_expires = data.get("RefreshTokenExpires")
+                    
+                    _LOGGER.info("Successfully refreshed JWT token")
+                    return True
+                
+                elif response.status == 401:
+                    _LOGGER.warning("Refresh token expired or invalid")
+                    return False
+                
+                else:
+                    _LOGGER.error("Unexpected status code during refresh: %d", response.status)
+                    return False
+                    
+        except (ClientResponseError, ClientError) as error:
+            _LOGGER.error("Error during token refresh: %s", error)
+            return False
+
+    async def _ensure_token(self) -> bool:
+        """Ensure we have a valid JWT token, refreshing or logging in if needed."""
+        # Quick check without lock
+        if self.jwt_token and self._jwt_is_valid():
+            return True
+        
+        # Need to acquire lock for auth operations
+        async with self._auth_lock:
+            # Double-check after acquiring lock
+            if self.jwt_token and self._jwt_is_valid():
+                return True
+            
+            # Try refresh first
+            if self.refresh_token and self._refresh_is_valid():
+                if await self._refresh():
+                    return True
+            
+            # Fall back to login
+            _LOGGER.info("Performing password login")
+            return await self.login()
+
+    async def _request(
+        self, 
+        method: str, 
+        endpoint: str, 
+        *, 
+        headers: Optional[Dict[str, str]] = None,
+        auth_required: bool = True,
+        retry_on_401: bool = True,
+        retry_on_429: bool = True,
+        timeout: int = 10,
+        **kwargs
+    ) -> Union[Dict[str, Any], str, bool, None]:
+        """
+        Centralized request wrapper with authentication and retry logic.
+        
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            endpoint: API endpoint path
+            headers: Additional headers to merge with common headers
+            auth_required: Whether authentication is required
+            retry_on_401: Whether to retry on 401 (with refresh/login)
+            retry_on_429: Whether to retry on 429 (with backoff)
+            timeout: Request timeout in seconds
+            **kwargs: Additional arguments for the request
+            
+        Returns:
+            Response data (dict for JSON, str for text) or boolean for success/failure
+        """
+        # Ensure we have a valid token if auth is required
+        if auth_required:
+            if not await self._ensure_token():
+                return False
+        
+        # Prepare headers
+        final_headers = {**self._get_headers(), **(headers or {})}
+        if auth_required and self.jwt_token:
+            final_headers["authorization"] = f"Bearer {self.jwt_token}"
+        
+        # Remove sensitive headers from logging
+        safe_headers = {k: v for k, v in final_headers.items() 
+                       if k.lower() not in ['authorization', 'cookie']}
+        
+        # Apply concurrency control
+        async with self._req_semaphore:
+            # Perform request with retry logic
+            for attempt in range(self.max_retries_429 + 1):
+                try:
+                    _LOGGER.debug("Making %s request to %s (attempt %d)", 
+                                 method, endpoint, attempt + 1)
+                    
+                    async with self.session.request(
+                        method,
+                        self.base_url + endpoint,
+                        headers=final_headers,
+                        timeout=timeout,
+                        **kwargs
+                    ) as response:
+                        # Handle 401 (Unauthorized)
+                        if response.status == 401 and retry_on_401 and auth_required:
+                            _LOGGER.warning("Received 401, attempting token refresh")
+                            
+                            # Try refresh first
+                            if await self._refresh():
+                                # Retry the original request once
+                                continue
+                            
+                            # If refresh failed, try login
+                            _LOGGER.warning("Refresh failed, attempting login")
+                            if await self.login():
+                                # Retry the original request once
+                                continue
+                            
+                            # Both refresh and login failed
+                            _LOGGER.error("Authentication failed after refresh and login attempts")
+                            return False
+                        
+                        # Handle 429 (Too Many Requests)
+                        if response.status == 429 and retry_on_429 and attempt < self.max_retries_429:
+                            retry_after = response.headers.get('Retry-After')
+                            
+                            if retry_after:
+                                try:
+                                    # Try to parse as seconds
+                                    wait_time = int(retry_after)
+                                except ValueError:
+                                    try:
+                                        # Try to parse as HTTP date
+                                        retry_date = parsedate_to_datetime(retry_after)
+                                        wait_time = (retry_date - datetime.utcnow()).total_seconds()
+                                        wait_time = max(0, wait_time)
+                                    except (ValueError, TypeError):
+                                        wait_time = self.backoff_base
+                            else:
+                                # Use exponential backoff with jitter
+                                wait_time = min(
+                                    self.backoff_base * (self.backoff_factor ** attempt),
+                                    self.backoff_max
+                                )
+                                # Add jitter (0 to 0.25s)
+                                wait_time += random.uniform(0, 0.25)
+                            
+                            _LOGGER.info("Rate limited (429), waiting %.2f seconds before retry", wait_time)
+                            await asyncio.sleep(wait_time)
+                            continue
+                        
+                        # Handle other status codes
+                        response.raise_for_status()
+                        
+                        # Parse response based on content type
+                        content_type = response.headers.get('Content-Type', '').lower()
+                        
+                        if 'application/json' in content_type:
+                            return await response.json()
+                        else:
+                            return await response.text()
+                            
+                except ClientResponseError as e:
+                    if e.status == 401 and retry_on_401 and auth_required:
+                        # This will be handled in the next iteration
+                        continue
+                    elif e.status == 429 and retry_on_429 and attempt < self.max_retries_429:
+                        # This will be handled in the next iteration
+                        continue
+                    else:
+                        _LOGGER.error("Request failed with status %d: %s", e.status, e)
+                        return await self.handle_client_error(endpoint, safe_headers, e)
+                        
+                except (ClientError, asyncio.TimeoutError) as error:
+                    _LOGGER.error("Request failed: %s", error)
+                    return await self.handle_client_error(endpoint, safe_headers, error)
+            
+            # If we get here, we've exhausted all retries
+            _LOGGER.error("Request failed after %d attempts", self.max_retries_429 + 1)
+            return False
+
+    async def _continue_kill_switch_not_enabled(self):
+        """Check if CheckWatt has requested integrations to back-off."""
+        url = "https://checkwatt.se/ha-killswitch.txt"
+        
+        # Ensure session is initialized
+        if self.session is None:
+            _LOGGER.error("Session not initialized. Use async context manager or call ensure_session() first.")
+            return False
+        
+        try:
+            headers = self._get_headers()
+            
+            # Ensure headers is a valid dictionary
+            if not isinstance(headers, dict):
+                _LOGGER.error("_get_headers() returned invalid type: %s, defaulting to empty dict", type(headers))
+                headers = {}
+            
+            async with self.session.get(url, headers=headers, timeout=10) as response:
+                data = await response.text()
+                if response.status == 200:
+                    kill = data.strip()  # Remove leading and trailing whitespaces
+                    enabled = kill == "0"
+                    
+                    if enabled:
+                        _LOGGER.debug("CheckWatt accepted and not enabled the kill-switch")
+                    else:
+                        _LOGGER.error("CheckWatt has requested to back down by enabling the kill-switch")
+                    
+                    return enabled
+
+                if response.status == 401:
+                    _LOGGER.error("Unauthorized: Check your CheckWatt authentication credentials")
+                    return False
+
+                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
+                return False
+
+        except Exception as error:
+            # Create safe headers for logging, handling case where headers might not be defined
+            try:
+                safe_headers = {k: v for k, v in headers.items() 
+                               if k.lower() not in ['authorization', 'cookie']}
+            except (AttributeError, NameError):
+                safe_headers = {}
+            
+            _LOGGER.error(
+                "Killswitch check failed. URL: %s, Headers: %s. Error: %s",
+                url,
+                safe_headers,
+                error,
+            )
+            return False
+
+    async def handle_client_error(self, endpoint, headers, error):
+        """Handle ClientError and log relevant information."""
+        # Remove sensitive headers from logging
+        safe_headers = {k: v for k, v in headers.items() 
+                       if k.lower() not in ['authorization', 'cookie']}
+        
+        _LOGGER.error(
+            "An error occurred during the request. URL: %s, Headers: %s. Error: %s",
+            self.base_url + endpoint,
+            safe_headers,
+            error,
+        )
+        return False
+
+    async def login(self):
+        """Login to CheckWatt."""
+        try:
+            if not await self._continue_kill_switch_not_enabled():
+                # CheckWatt want us to back down.
+                return False
+            _LOGGER.debug("Kill-switch not enabled, continue")
+
+            credentials = f"{self.username}:{self.password}"
+            encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
+                "utf-8"
+            )
+            endpoint = "/user/Login?audience=eib"
+            # Define headers with the encoded credentials
+            headers = {
+                **self._get_headers(),
+                "authorization": f"Basic {encoded_credentials}",
+            }
+            payload = {
+                "OneTimePassword": "",
+            }
+
+            timeout_seconds = 10
+            async with self.session.post(
+                self.base_url + endpoint,
+                headers=headers,
+                json=payload,
+                timeout=timeout_seconds,
+            ) as response:
+                data = await response.json()
+                if response.status == 200:
+                    self.jwt_token = data.get("JwtToken")
+                    self.refresh_token = data.get("RefreshToken")
+                    self.refresh_token_expires = data.get("RefreshTokenExpires")
+                    _LOGGER.info("Successfully logged in to CheckWatt")
+                    return True
+
+                if response.status == 401:
+                    _LOGGER.error(
+                        "Unauthorized: Check your CheckWatt authentication credentials"
+                    )
+                    return False
+
+                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
+                return False
+
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
+    async def get_customer_details(self):
+        """Fetch customer details from CheckWatt."""
+        try:
+            endpoint = "/controlpanel/CustomerDetail"
+            
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
+                return False
+            
+            self.customer_details = result
+
+            meters = self.customer_details.get("Meter", [])
+            if meters:
+                soc_meter = next(
+                    (
+                        meter
+                        for meter in meters
+                        if meter.get("InstallationType") == "SoC"
+                    ),
+                    None,
+                )
+
+                if not soc_meter:
+                    _LOGGER.error("No SoC meter found")
+                    return False
+
+                self.display_name = soc_meter.get("DisplayName")
+                self.reseller_id = soc_meter.get("ResellerId")
+                self.energy_provider_id = soc_meter.get("ElhandelsbolagId")
+                self.comments = soc_meter.get("Comments")
+                logbook = soc_meter.get("Logbook")
+                if logbook:
+                    (
+                        self.battery_registration,
+                        self.logbook_entries,
+                    ) = self._extract_content_and_logbook(logbook)
+                    self._extract_fcr_d_state()
+
+                charging_meter = next(
+                    (
+                        meter
+                        for meter in meters
+                        if meter.get("InstallationType") == "Charging"
+                    ),
+                    None,
+                )
+                if charging_meter:
+                    self.battery_charge_peak_ac = charging_meter.get("PeakAcKw")
+                    self.battery_charge_peak_dc = charging_meter.get("PeakDcKw")
+
+                discharge_meter = next(
+                    (
+                        meter
+                        for meter in meters
+                        if meter.get("InstallationType") == "Discharging"
+                    ),
+                    None,
+                )
+                if discharge_meter:
+                    self.battery_discharge_peak_ac = discharge_meter.get(
+                        "PeakAcKw"
+                    )
+                    self.battery_discharge_peak_dc = discharge_meter.get(
+                        "PeakDcKw"
+                    )
+
+            return True
+
+        except Exception as error:
+            _LOGGER.error("Error in get_customer_details: %s", error)
+            return False
+
+    async def get_site_id(self):
+        """Get site ID from RPI serial number."""
+        if self.site_id is not None:
+            return self.site_id
+
+        if self.rpi_serial is None:
+            raise ValueError(
+                "RPI serial not available. Call get_customer_details() first."
+            )
+
+        try:
+            endpoint = f"/Site/SiteIdBySerial?serial={self.rpi_serial}"
+            
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
+                return False
+            
+            if isinstance(result, dict) and "SiteId" in result:
+                self.site_id = str(result["SiteId"])
+                _LOGGER.debug("Successfully extracted site ID: %s", self.site_id)
+                return self.site_id
+            
+            _LOGGER.error("Unexpected response format for site ID: %s", result)
+            return False
+
+        except Exception as error:
+            _LOGGER.error("Error in get_site_id: %s", error)
+            return False
+
+    async def debug_revenue_workflow(self):
+        """Debug method to diagnose revenue workflow issues."""
+        _LOGGER.info("=== Revenue Workflow Debug ===")
+        _LOGGER.info("Customer details loaded: %s", self.customer_details is not None)
+        _LOGGER.info("RPI data loaded: %s", self.rpi_data is not None)
+        _LOGGER.info("Site ID cached: %s", self.site_id)
+        
+        if self.customer_details:
+            meters = self.customer_details.get("Meter", [])
+            _LOGGER.info("Number of meters: %d", len(meters))
+            for i, meter in enumerate(meters):
+                _LOGGER.info("Meter %d: Type=%s, RpiSerial=%s", 
+                            i, meter.get("InstallationType"), meter.get("RpiSerial"))
+        
+        rpi_serial = self.rpi_serial
+        _LOGGER.info("RPI Serial: %s", rpi_serial)
+        
+        if rpi_serial:
+            _LOGGER.info("Attempting to get site ID...")
+            site_id = await self.get_site_id()
+            _LOGGER.info("Site ID result: %s", site_id)
+        else:
+            _LOGGER.error("Cannot get site ID - RPI serial is None")
+        
+        _LOGGER.info("=== End Debug ===")
+
+    async def get_fcrd_month_net_revenue(self):
+        """Fetch FCR-D revenues from CheckWatt."""
+        misseddays = 0
+        try:
+            site_id = await self.get_site_id()
+            if site_id is False:
+                _LOGGER.error("Failed to get site ID for FCR-D month revenue")
+                return False
+            
+            if not site_id:
+                _LOGGER.error("Site ID is empty or None for FCR-D month revenue")
+                return False
+                
+            _LOGGER.debug("Using site ID %s for FCR-D month revenue", site_id)
+            
+            from_date = datetime.now().strftime("%Y-%m-01")
+            to_date = datetime.now() + timedelta(days=1)
+            to_date = to_date.strftime("%Y-%m-%d")
+            lastday_date = datetime.now() + relativedelta(months=1)
+            lastday_date = datetime(
+                year=lastday_date.year, month=lastday_date.month, day=1
+            )
+
+            lastday_date = lastday_date - timedelta(days=1)
+
+            lastday = lastday_date.strftime("%d")
+
+            dayssofar = datetime.now()
+            dayssofar = dayssofar.strftime("%d")
+
+            daysleft = int(lastday) - int(dayssofar)
+            endpoint = (
+                f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+            )
+            _LOGGER.debug("FCR-D month revenue endpoint: %s", endpoint)
+
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
+                _LOGGER.error("Failed to retrieve FCR-D month revenue from endpoint: %s", endpoint)
+                return False
+            
+            revenue = result
+            for each in revenue["Revenue"]:
+                self.revenuemonth += each["NetRevenue"]
+                if each["NetRevenue"] == 0:
+                    misseddays += 1
+            dayswithmoney = int(dayssofar) - int(misseddays)
+            
+            if dayswithmoney > 0:
+                self.dailyaverage = self.revenuemonth / int(dayswithmoney)
+            else:
+                self.dailyaverage = 0
+            self.monthestimate = (
+                self.dailyaverage * daysleft
+            ) + self.revenuemonth
+            _LOGGER.info("Successfully retrieved FCR-D month revenue")
+            return True
+
+        except Exception as error:
+            _LOGGER.error("Error in get_fcrd_month_net_revenue: %s", error)
+            return False
+
+    async def get_fcrd_today_net_revenue(self):
+        """Fetch FCR-D revenues from CheckWatt."""
+        try:
+            site_id = await self.get_site_id()
+            if site_id is False:
+                _LOGGER.error("Failed to get site ID for FCR-D today revenue")
+                return False
+            
+            if not site_id:
+                _LOGGER.error("Site ID is empty or None for FCR-D today revenue")
+                return False
+                
+            _LOGGER.debug("Using site ID %s for FCR-D today revenue", site_id)
+            
+            from_date = datetime.now().strftime("%Y-%m-%d")
+            end_date = datetime.now() + timedelta(days=2)
+            to_date = end_date.strftime("%Y-%m-%d")
+
+            endpoint = (
+                f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+            )
+            _LOGGER.debug("FCR-D today revenue endpoint: %s", endpoint)
+
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
+                _LOGGER.error("Failed to retrieve FCR-D today revenue from endpoint: %s", endpoint)
+                return False
+            
+            self.revenue = result
+            _LOGGER.info("Successfully retrieved FCR-D today revenue")
+            return True
+
+        except Exception as error:
+            _LOGGER.error("Error in get_fcrd_today_net_revenue: %s", error)
+            return False
+
+    async def get_fcrd_year_net_revenue(self):
+        """Fetch FCR-D revenues from CheckWatt."""
+        site_id = await self.get_site_id()
+        if site_id is False:
+            _LOGGER.error("Failed to get site ID for FCR-D year revenue")
+            return False
+        
+        if not site_id:
+            _LOGGER.error("Site ID is empty or None for FCR-D year revenue")
+            return False
+            
+        _LOGGER.debug("Using site ID %s for FCR-D year revenue", site_id)
+        
+        yesterday_date = datetime.now() + timedelta(days=1)
+        yesterday_date = yesterday_date.strftime("-%m-%d")
+        months = ["-01-01", "-06-30", "-07-01", yesterday_date]
+        loop = 0
+        retval = False
+        if yesterday_date <= "-07-01":
+            try:
+                year_date = datetime.now().strftime("%Y")
+                to_date = year_date + yesterday_date
+                from_date = year_date + "-01-01"
+                endpoint = (
+                    f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+                )
+                _LOGGER.debug("FCR-D year revenue endpoint (first half): %s", endpoint)
+                
+                result = await self._request("GET", endpoint, auth_required=True)
+                if result is False:
+                    _LOGGER.error("Failed to retrieve FCR-D year revenue from endpoint: %s", endpoint)
+                    return False
+                
+                self.revenueyear = result
+                for each in self.revenueyear["Revenue"]:
+                    self.revenueyeartotal += each["NetRevenue"]
+                retval = True
+                _LOGGER.info("Successfully retrieved FCR-D year revenue (first half)")
+                return retval
+
+            except Exception as error:
+                _LOGGER.error("Error in get_fcrd_year_net_revenue (first half): %s", error)
+                return False
+        else:
+            try:
+                while loop < 3:
+                    year_date = datetime.now().strftime("%Y")
+                    to_date = year_date + months[loop + 1]
+                    from_date = year_date + months[loop]
+                    endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+                    _LOGGER.debug("FCR-D year revenue endpoint (period %d): %s", loop, endpoint)
+                    
+                    result = await self._request("GET", endpoint, auth_required=True)
+                    if result is False:
+                        _LOGGER.error("Failed to retrieve FCR-D year revenue from endpoint: %s", endpoint)
+                        return False
+                    
+                    self.revenueyear = result
+                    for each in self.revenueyear["Revenue"]:
+                        self.revenueyeartotal += each["NetRevenue"]
+                    loop += 2
+                    retval = True
+                    
+                _LOGGER.info("Successfully retrieved FCR-D year revenue (multiple periods)")
+                return retval
+
+            except Exception as error:
+                _LOGGER.error("Error in get_fcrd_year_net_revenue (multiple periods): %s", error)
+                return False
+
+    async def fetch_and_return_net_revenue(self, from_date, to_date):
+        """Fetch FCR-D revenues from CheckWatt as per provided range."""
+        try:
+            site_id = await self.get_site_id()
+            if site_id is False:
+                _LOGGER.error("Failed to get site ID for custom revenue range")
+                return None
+            
+            if not site_id:
+                _LOGGER.error("Site ID is empty or None for custom revenue range")
+                return None
+                
+            _LOGGER.debug("Using site ID %s for custom revenue range", site_id)
+            
+            # Validate date format and ensure they are dates
+            date_format = "%Y-%m-%d"
+            try:
+                from_date = datetime.strptime(from_date, date_format).date()
+                to_date = datetime.strptime(to_date, date_format).date()
+            except ValueError:
+                raise ValueError(
+                    "Input dates must be valid dates with the format YYYY-MM-DD."
+                )
+
+            # Validate from_date and to_date
+            today = date.today()
+            six_months_ago = today - relativedelta(months=6)
+
+            if not (six_months_ago <= from_date <= today):
+                raise ValueError(
+                    "From date must be within the last 6 months and not beyond today."
+                )
+
+            if not (six_months_ago <= to_date <= today):
+                raise ValueError(
+                    "To date must be within the last 6 months and not beyond today."
+                )
+
+            if from_date >= to_date:
+                raise ValueError("From date must be before To date.")
+
+            # Extend to_date by one day
+            to_date += timedelta(days=1)
+
+            endpoint = (
+                f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+            )
+            _LOGGER.debug("Custom revenue range endpoint: %s", endpoint)
+
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
+                _LOGGER.error("Failed to retrieve custom revenue range from endpoint: %s", endpoint)
+                return None
+            
+            _LOGGER.info("Successfully retrieved custom revenue range")
+            return result
+
+        except Exception as error:
+            _LOGGER.error("Error in fetch_and_return_net_revenue: %s", error)
+            return None
 
     def _extract_content_and_logbook(self, input_string):
         """Pull the registered information from the logbook."""
@@ -181,397 +930,11 @@ class CheckwattManager:
                     self.fcrd_info = None
                 break  # stop so we get the first row in logbook
 
-    async def handle_client_error(self, endpoint, headers, error):
-        """Handle ClientError and log relevant information."""
-        _LOGGER.error(
-            "An error occurred during the request. URL: %s, Headers: %s. Error: %s",
-            self.base_url + endpoint,
-            headers,
-            error,
-        )
-        return False
 
-    async def _continue_kill_switch_not_enabled(self):
-        """Check if CheckWatt has requested integrations to back-off."""
-        try:
-            url = "https://checkwatt.se/ha-killswitch.txt"
-            headers = {**self._get_headers()}
-            async with self.session.get(url, headers=headers) as response:
-                data = await response.text()
-                if response.status == 200:
-                    kill = data.strip()  # Remove leading and trailing whitespaces
-                    if kill == "0":
-                        # We are OK to continue
-                        _LOGGER.debug(
-                            "CheckWatt accepted and not enabled the kill-switch"
-                        )
-                        return True
 
-                    # Kill was requested
-                    _LOGGER.error(
-                        "CheckWatt has requested to back down by enabling the kill-switch"  # noqa: E501
-                    )
-                    return False
 
-                if response.status == 401:
-                    _LOGGER.error(
-                        "Unauthorized: Check your CheckWatt authentication credentials"
-                    )
-                    return False
 
-                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
-                return False
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(url, headers, error)
-
-    async def login(self):
-        """Login to CheckWatt."""
-        try:
-            if not await self._continue_kill_switch_not_enabled():
-                # CheckWatt want us to back down.
-                return False
-            _LOGGER.debug("Kill-switch not enabled, continue")
-
-            credentials = f"{self.username}:{self.password}"
-            encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
-                "utf-8"
-            )
-            endpoint = "/user/Login?audience=eib"
-            # Define headers with the encoded credentials
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Basic {encoded_credentials}",
-            }
-            payload = {
-                "OneTimePassword": "",
-            }
-
-            timeout_seconds = 10
-            async with self.session.post(
-                self.base_url + endpoint,
-                headers=headers,
-                json=payload,
-                timeout=timeout_seconds,
-            ) as response:
-                data = await response.json()
-                if response.status == 200:
-                    self.jwt_token = data.get("JwtToken")
-                    self.refresh_token = data.get("RefreshToken")
-                    return True
-
-                if response.status == 401:
-                    _LOGGER.error(
-                        "Unauthorized: Check your CheckWatt authentication credentials"
-                    )
-                    return False
-
-                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
-                return False
-
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
-
-    async def get_customer_details(self):
-        """Fetch customer details from CheckWatt."""
-        try:
-            endpoint = "/controlpanel/CustomerDetail"
-
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    self.customer_details = await response.json()
-
-                    meters = self.customer_details.get("Meter", [])
-                    if meters:
-                        soc_meter = next(
-                            (
-                                meter
-                                for meter in meters
-                                if meter.get("InstallationType") == "SoC"
-                            ),
-                            None,
-                        )
-
-                        if not soc_meter:
-                            _LOGGER.error("No SoC meter found")
-                            return False
-
-                        self.display_name = soc_meter.get("DisplayName")
-                        self.reseller_id = soc_meter.get("ResellerId")
-                        self.energy_provider_id = soc_meter.get("ElhandelsbolagId")
-                        self.comments = soc_meter.get("Comments")
-                        logbook = soc_meter.get("Logbook")
-                        if logbook:
-                            (
-                                self.battery_registration,
-                                self.logbook_entries,
-                            ) = self._extract_content_and_logbook(logbook)
-                            self._extract_fcr_d_state()
-
-                        charging_meter = next(
-                            (
-                                meter
-                                for meter in meters
-                                if meter.get("InstallationType") == "Charging"
-                            ),
-                            None,
-                        )
-                        if charging_meter:
-                            self.battery_charge_peak_ac = charging_meter.get("PeakAcKw")
-                            self.battery_charge_peak_dc = charging_meter.get("PeakDcKw")
-
-                        discharge_meter = next(
-                            (
-                                meter
-                                for meter in meters
-                                if meter.get("InstallationType") == "Discharging"
-                            ),
-                            None,
-                        )
-                        if discharge_meter:
-                            self.battery_discharge_peak_ac = discharge_meter.get(
-                                "PeakAcKw"
-                            )
-                            self.battery_discharge_peak_dc = discharge_meter.get(
-                                "PeakDcKw"
-                            )
-
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
-                return False
-
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
-
-    async def get_site_id(self):
-        """Get site ID from RPI serial number."""
-        if self.site_id is not None:
-            return self.site_id
-
-        if self.rpi_serial is None:
-            raise ValueError(
-                "RPI serial not available. Call get_customer_details() first."
-            )
-
-        try:
-            endpoint = f"/Site/SiteIdBySerial?serial={self.rpi_serial}"
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    raw_response = await response.text()
-
-                    try:
-                        response_data = json.loads(raw_response)
-                        self.site_id = str(response_data["SiteId"])
-                        return self.site_id
-                    except json.JSONDecodeError as e:
-                        # Fallback - maybe it's just the number as a string
-                        self.site_id = raw_response.strip('"')
-                        return self.site_id
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
-                return False
-
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
-
-    async def get_fcrd_month_net_revenue(self):
-        """Fetch FCR-D revenues from CheckWatt."""
-        misseddays = 0
-        try:
-            site_id = await self.get_site_id()
-            from_date = datetime.now().strftime("%Y-%m-01")
-            to_date = datetime.now() + timedelta(days=1)
-            to_date = to_date.strftime("%Y-%m-%d")
-            lastday_date = datetime.now() + relativedelta(months=1)
-            lastday_date = datetime(
-                year=lastday_date.year, month=lastday_date.month, day=1
-            )
-
-            lastday_date = lastday_date - timedelta(days=1)
-
-            lastday = lastday_date.strftime("%d")
-
-            dayssofar = datetime.now()
-            dayssofar = dayssofar.strftime("%d")
-
-            daysleft = int(lastday) - int(dayssofar)
-            endpoint = (
-                f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
-            )
-
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            # First fetch the revenue
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                revenue = await response.json()
-                for each in revenue["Revenue"]:
-                    self.revenuemonth += each["NetRevenue"]
-                    if each["NetRevenue"] == 0:
-                        misseddays += 1
-                dayswithmoney = int(dayssofar) - int(misseddays)
-                if response.status == 200:
-                    if dayswithmoney > 0:
-                        self.dailyaverage = self.revenuemonth / int(dayswithmoney)
-                    else:
-                        self.dailyaverage = 0
-                    self.monthestimate = (
-                        self.dailyaverage * daysleft
-                    ) + self.revenuemonth
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
-                return False
-
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
-
-    async def get_fcrd_today_net_revenue(self):
-        """Fetch FCR-D revenues from CheckWatt."""
-        try:
-            site_id = await self.get_site_id()
-            from_date = datetime.now().strftime("%Y-%m-%d")
-            end_date = datetime.now() + timedelta(days=2)
-            to_date = end_date.strftime("%Y-%m-%d")
-
-            endpoint = (
-                f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
-            )
-
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-            # First fetch the revenue
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                self.revenue = await response.json()
-                if response.status == 200:
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
-                return False
-
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
-
-    async def get_fcrd_year_net_revenue(self):
-        """Fetch FCR-D revenues from CheckWatt."""
-        site_id = await self.get_site_id()
-        yesterday_date = datetime.now() + timedelta(days=1)
-        yesterday_date = yesterday_date.strftime("-%m-%d")
-        months = ["-01-01", "-06-30", "-07-01", yesterday_date]
-        loop = 0
-        retval = False
-        if yesterday_date <= "-07-01":
-            try:
-                year_date = datetime.now().strftime("%Y")
-                to_date = year_date + yesterday_date
-                from_date = year_date + "-01-01"
-                endpoint = (
-                    f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
-                )
-                # Define headers with the JwtToken
-                headers = {
-                    **self._get_headers(),
-                    "authorization": f"Bearer {self.jwt_token}",
-                }
-                # First fetch the revenue
-                async with self.session.get(
-                    self.base_url + endpoint, headers=headers
-                ) as responseyear:  # noqa: E501
-                    responseyear.raise_for_status()
-                    self.revenueyear = await responseyear.json()
-                    for each in self.revenueyear["Revenue"]:
-                        self.revenueyeartotal += each["NetRevenue"]
-                    if responseyear.status == 200:
-                        retval = True
-                    else:
-                        _LOGGER.error(
-                            "Obtaining data from URL %s failed with status code %d",
-                            self.base_url + endpoint,
-                            responseyear.status,
-                        )
-                return retval
-
-            except (ClientResponseError, ClientError) as error:
-                return await self.handle_client_error(endpoint, headers, error)
-        else:
-            try:
-                while loop < 3:
-                    year_date = datetime.now().strftime("%Y")
-                    to_date = year_date + months[loop + 1]
-                    from_date = year_date + months[loop]
-                    endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
-                    # Define headers with the JwtToken
-                    headers = {
-                        **self._get_headers(),
-                        "authorization": f"Bearer {self.jwt_token}",
-                    }
-                    # First fetch the revenue
-                    async with self.session.get(
-                        self.base_url + endpoint, headers=headers
-                    ) as responseyear:  # noqa: E501
-                        responseyear.raise_for_status()
-                        self.revenueyear = await responseyear.json()
-                        for each in self.revenueyear["Revenue"]:
-                            self.revenueyeartotal += each["NetRevenue"]
-                        if responseyear.status == 200:
-                            loop += 2
-                            retval = True
-                        else:
-                            _LOGGER.error(
-                                "Obtaining data from URL %s failed with status code %d",  # noqa: E501
-                                self.base_url + endpoint,
-                                responseyear.status,
-                            )
-                return retval
-
-            except (ClientResponseError, ClientError) as error:
-                return await self.handle_client_error(endpoint, headers, error)
 
     async def fetch_and_return_net_revenue(self, from_date, to_date):
         """Fetch FCR-D revenues from CheckWatt as per provided range."""
@@ -611,29 +974,17 @@ class CheckwattManager:
                 f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
             )
 
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-            # First fetch the revenue
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                revenue = await response.json()
-                if response.status == 200:
-                    return revenue
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
                 return None
+            
+            return result
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
+        except Exception as error:
+            _LOGGER.error("Error in fetchand_return_net_revenue: %s", error)
+            return None
+
+
 
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
@@ -659,30 +1010,16 @@ class CheckwattManager:
                 3
             )  # 0: Hourly, 1: Daily, 2: Monthly, 3: Yearly
 
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            # First fetch the revenue
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    self.power_data = await response.json()
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
                 return False
+            
+            self.power_data = result
+            return True
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
+        except Exception as error:
+            _LOGGER.error("Error in get_power_data: %s", error)
+            return False
 
     async def get_energy_flow(self):
         """Fetch Power Data from CheckWatt."""
@@ -690,30 +1027,16 @@ class CheckwattManager:
         try:
             endpoint = "/ems/energyflow"
 
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            # Fetch Energy Flows
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    self.energy_data = await response.json()
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
                 return False
+            
+            self.energy_data = result
+            return True
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
+        except Exception as error:
+            _LOGGER.error("Error in get_energy_flow: %s", error)
+            return False
 
     async def get_ems_settings(self, rpi_serial=None):
         """Fetch EMS settings from CheckWatt."""
@@ -724,60 +1047,33 @@ class CheckwattManager:
 
             endpoint = f"/ems/service/Pending?Serial={rpi_serial}"
 
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            # Fetch Energy Flows
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    self.ems = await response.json()
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
                 return False
+            
+            self.ems = result
+            return True
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
+        except Exception as error:
+            _LOGGER.error("Error in get_ems_settings: %s", error)
+            return False
 
     async def get_price_zone(self):
         """Fetch Price Zone from CheckWatt."""
 
         try:
             endpoint = "/ems/pricezone"
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            # First fetch the revenue
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    self.price_zone = await response.text()
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
+            
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
                 return False
+            
+            self.price_zone = result
+            return True
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
+        except Exception as error:
+            _LOGGER.error("Error in get_price_zone: %s", error)
+            return False
 
     async def get_spot_price(self):
         """Fetch Spot Price from CheckWatt."""
@@ -789,30 +1085,17 @@ class CheckwattManager:
             if self.price_zone is None:
                 await self.get_price_zone()
             endpoint = f"/ems/spotprice?zone={self.price_zone}&fromDate={from_date}&toDate={to_date}"  # noqa: E501
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            # First fetch the revenue
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    self.spot_prices = await response.json()
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
+            
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
                 return False
+            
+            self.spot_prices = result
+            return True
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
+        except Exception as error:
+            _LOGGER.error("Error in get_spot_price: %s", error)
+            return False
 
     async def get_battery_month_peak_effect(self):
         """Fetch Price Zone from CheckWatt."""
@@ -820,64 +1103,40 @@ class CheckwattManager:
 
         try:
             endpoint = f"/ems/PeakBoughtMonth?month={month}"
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
-            }
-
-            # First fetch the revenue
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    peak_data = await response.json()
-                    if "HourPeak" in peak_data:
-                        self.month_peak_effect = peak_data["HourPeak"]
-                        return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
+            
+            result = await self._request("GET", endpoint, auth_required=True)
+            if result is False:
                 return False
+            
+            if "HourPeak" in result:
+                self.month_peak_effect = result["HourPeak"]
+                return True
+            
+            return False
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
+        except Exception as error:
+            _LOGGER.error("Error in get_battery_month_peak_effect: %s", error)
+            return False
 
     async def get_energy_trading_company(self, input_id):
         """Translate Energy Company Id to Energy Company Name."""
         try:
             endpoint = "/controlpanel/elhandelsbolag"
 
-            # Define headers with the JwtToken
-            headers = {
-                **self._get_headers(),
-            }
-
-            async with self.session.get(
-                self.base_url + endpoint, headers=headers
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    energy_trading_companies = await response.json()
-                    for energy_trading_company in energy_trading_companies:
-                        if energy_trading_company["Id"] == input_id:
-                            return energy_trading_company["DisplayName"]
-
-                    return None
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
+            result = await self._request("GET", endpoint, auth_required=False)
+            if result is False:
                 return None
+            
+            energy_trading_companies = result
+            for energy_trading_company in energy_trading_companies:
+                if energy_trading_company["Id"] == input_id:
+                    return energy_trading_company["DisplayName"]
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, headers, error)
+            return None
+
+        except Exception as error:
+            _LOGGER.error("Error in get_energy_trading_company: %s", error)
+            return None
 
     async def get_rpi_data(self, rpi_serial=None):
         """Fetch RPi Data from CheckWatt."""
@@ -891,24 +1150,17 @@ class CheckwattManager:
                 return False
 
             endpoint = f"/register/checkrpiv2?rpi={rpi_serial}"
-            # First fetch the revenue
-            async with self.session.get(
-                self.base_url + endpoint,
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    self.rpi_data = await response.json()
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
+            
+            result = await self._request("GET", endpoint, auth_required=False)
+            if result is False:
                 return False
+            
+            self.rpi_data = result
+            return True
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, "", error)
+        except Exception as error:
+            _LOGGER.error("Error in get_rpi_data: %s", error)
+            return False
 
     async def get_meter_status(self, meter_id=None):
         """Fetch RPi Data from CheckWatt."""
@@ -922,24 +1174,17 @@ class CheckwattManager:
                 return False
 
             endpoint = f"/asset/status?meterId={meter_id}"
-            # First fetch the revenue
-            async with self.session.get(
-                self.base_url + endpoint,
-            ) as response:
-                response.raise_for_status()
-                if response.status == 200:
-                    self.meter_data = await response.json()
-                    return True
-
-                _LOGGER.error(
-                    "Obtaining data from URL %s failed with status code %d",
-                    self.base_url + endpoint,
-                    response.status,
-                )
+            
+            result = await self._request("GET", endpoint, auth_required=False)
+            if result is False:
                 return False
+            
+            self.meter_data = result
+            return True
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(endpoint, "", error)
+        except Exception as error:
+            _LOGGER.error("Error in get_meter_status: %s", error)
+            return False
 
     @property
     def ems_settings(self):
@@ -1271,6 +1516,43 @@ class CheckwattManager:
 
         _LOGGER.warning("Unable to find Meter Data for Meter Version")
         return None
+
+    # Properties for debugging token state
+    @property
+    def jwt_expires_at(self) -> Optional[datetime]:
+        """Get JWT expiration time for debugging."""
+        if not self.jwt_token:
+            return None
+        
+        try:
+            parts = self.jwt_token.split('.')
+            if len(parts) != 3:
+                return None
+            
+            payload = base64.urlsafe_b64decode(parts[1] + '==').decode('utf-8')
+            claims = json.loads(payload)
+            
+            exp = claims.get('exp')
+            if not exp:
+                return None
+            
+            return datetime.fromtimestamp(exp)
+            
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
+            return None
+
+    @property
+    def refresh_expires_at(self) -> Optional[datetime]:
+        """Get refresh token expiration time for debugging."""
+        if not self.refresh_token_expires:
+            return None
+        
+        try:
+            return datetime.fromisoformat(
+                self.refresh_token_expires.replace('Z', '+00:00')
+            )
+        except (ValueError, TypeError):
+            return None
 
 
 class CheckWattRankManager:
