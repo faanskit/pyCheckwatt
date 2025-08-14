@@ -5,6 +5,9 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 import pytest_asyncio
 
+# Add project root to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
 from pycheckwatt import CheckwattManager
 from tests.fixtures.sample_responses import (
     SAMPLE_CUSTOMER_DETAILS_JSON,
@@ -13,9 +16,6 @@ from tests.fixtures.sample_responses import (
     SAMPLE_LOGIN_RESPONSE,
     SAMPLE_POWER_DATA_RESPONSE,
 )
-
-# Add project root to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 class TestCheckwattManagerInitialization:
@@ -104,16 +104,10 @@ class TestCustomerDataRetrieval:
         async with CheckwattManager("test_user", "test_pass") as manager:
 
             manager.jwt_token = "test_token"
-
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(
-                    return_value=SAMPLE_CUSTOMER_DETAILS_JSON
-                )
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
+                
                 result = await manager.get_customer_details()
 
                 assert result is True
@@ -126,16 +120,10 @@ class TestCustomerDataRetrieval:
         async with CheckwattManager("test_user", "test_pass") as manager:
 
             manager.jwt_token = "test_token"
-
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(
-                    return_value=SAMPLE_CUSTOMER_DETAILS_JSON
-                )
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
+                
                 await manager.get_customer_details()
 
                 # Verify battery registration was extracted from logbook
@@ -150,16 +138,10 @@ class TestCustomerDataRetrieval:
         async with CheckwattManager("test_user", "test_pass") as manager:
 
             manager.jwt_token = "test_token"
-
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(
-                    return_value=SAMPLE_CUSTOMER_DETAILS_JSON
-                )
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
+                
                 await manager.get_customer_details()
 
                 # Verify FCR-D state was extracted
@@ -177,16 +159,10 @@ class TestPropertyAccess:
         async with CheckwattManager("test_user", "test_pass") as manager:
 
             manager.jwt_token = "test_token"
-
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(
-                    return_value=SAMPLE_CUSTOMER_DETAILS_JSON
-                )
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
+                
                 await manager.get_customer_details()
 
             yield manager
@@ -245,17 +221,11 @@ class TestEnergyDataRetrieval:
         async with CheckwattManager("test_user", "test_pass") as manager:
 
             manager.jwt_token = "test_token"
-            manager.customer_details = (
-                SAMPLE_CUSTOMER_DETAILS_JSON  # Needed for endpoint building
-            )
-
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(return_value=SAMPLE_POWER_DATA_RESPONSE)
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON  # Needed for endpoint building
+            
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_POWER_DATA_RESPONSE
+                
                 result = await manager.get_power_data()
 
                 assert result is True
@@ -269,14 +239,10 @@ class TestEnergyDataRetrieval:
 
             manager.jwt_token = "test_token"
             manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON
-
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(return_value=SAMPLE_POWER_DATA_RESPONSE)
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_POWER_DATA_RESPONSE
+                
                 await manager.get_power_data()
 
                 # Test energy properties with sums of all measurements
@@ -299,8 +265,8 @@ class TestFCRDRevenue:
             manager.jwt_token = "test_token"
 
             # Without customer details (no RPI serial)
-            with pytest.raises(ValueError, match="RPI serial not available"):
-                await manager.get_fcrd_today_net_revenue()
+            result = await manager.get_fcrd_today_net_revenue()
+            assert result is False
 
     @pytest.mark.asyncio
     async def test_fcrd_revenue_methods_success(self):
@@ -310,28 +276,17 @@ class TestFCRDRevenue:
             manager.jwt_token = "test_token"
 
             # Load customer details first (provides RPI serial)
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(
-                    return_value=SAMPLE_CUSTOMER_DETAILS_JSON
-                )
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
+                
                 await manager.get_customer_details()
 
             # Mock FCR-D revenue calls
-            with patch.object(
-                manager, "get_site_id", return_value="test_site_123"
-            ), patch("aiohttp.ClientSession.get") as mock_get:
-
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(return_value=SAMPLE_FCRD_RESPONSE)
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            with patch.object(manager, 'get_site_id', return_value="test_site_123"), \
+                 patch.object(manager, '_request') as mock_request:
+                
+                mock_request.return_value = SAMPLE_FCRD_RESPONSE
+                
                 # Test revenue methods
                 result = await manager.get_fcrd_today_net_revenue()
                 assert result is True
@@ -353,16 +308,10 @@ class TestEMSSettings:
 
             manager.jwt_token = "test_token"
             manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON
-
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(
-                    return_value=SAMPLE_EMS_SETTINGS_RESPONSE
-                )
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_EMS_SETTINGS_RESPONSE
+                
                 result = await manager.get_ems_settings()
 
                 assert result is True
@@ -398,52 +347,31 @@ class TestCompleteWorkflow:
                 assert login_result is True
 
             # Step 2: Get customer details
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(
-                    return_value=SAMPLE_CUSTOMER_DETAILS_JSON
-                )
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
+                
                 await manager.get_customer_details()
 
             # Step 3: Get FCR-D revenue data
-            with patch.object(manager, "get_site_id", return_value="test_site"), patch(
-                "aiohttp.ClientSession.get"
-            ) as mock_get:
-
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(return_value=SAMPLE_FCRD_RESPONSE)
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            with patch.object(manager, 'get_site_id', return_value="test_site"), \
+                 patch.object(manager, '_request') as mock_request:
+                
+                mock_request.return_value = SAMPLE_FCRD_RESPONSE
+                
                 await manager.get_fcrd_today_net_revenue()
                 await manager.get_fcrd_year_net_revenue()
                 await manager.get_fcrd_month_net_revenue()
 
             # Step 4: Get EMS settings
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(
-                    return_value=SAMPLE_EMS_SETTINGS_RESPONSE
-                )
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_EMS_SETTINGS_RESPONSE
+                
                 await manager.get_ems_settings()
 
             # Step 5: Get power data
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(return_value=SAMPLE_POWER_DATA_RESPONSE)
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_POWER_DATA_RESPONSE
+                
                 await manager.get_power_data()
 
             # Verify all properties used in example.py work
@@ -472,15 +400,9 @@ class TestMethodCallDependencies:
 
             # After get_customer_details()
             manager.jwt_token = "test_token"
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(
-                    return_value=SAMPLE_CUSTOMER_DETAILS_JSON
-                )
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
+                
                 await manager.get_customer_details()
 
             assert manager.registered_owner is not None
@@ -497,14 +419,10 @@ class TestMethodCallDependencies:
             # After get_power_data()
             manager.jwt_token = "test_token"
             manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON
-
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(return_value=SAMPLE_POWER_DATA_RESPONSE)
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_POWER_DATA_RESPONSE
+                
                 await manager.get_power_data()
 
             assert manager.total_solar_energy == 11124779.0  # Sum of all measurements
@@ -522,16 +440,10 @@ class TestMethodCallDependencies:
             # After get_ems_settings()
             manager.jwt_token = "test_token"
             manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON
-
-            with patch("aiohttp.ClientSession.get") as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.json = AsyncMock(
-                    return_value=SAMPLE_EMS_SETTINGS_RESPONSE
-                )
-                mock_response.raise_for_status = Mock()
-                mock_get.return_value.__aenter__.return_value = mock_response
-
+            
+            with patch.object(manager, '_request') as mock_request:
+                mock_request.return_value = SAMPLE_EMS_SETTINGS_RESPONSE
+                
                 await manager.get_ems_settings()
 
             assert manager.ems_settings == "Currently optimized (CO)"
