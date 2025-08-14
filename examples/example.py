@@ -8,8 +8,8 @@ from pycheckwatt import CheckwattManager
 
 
 async def main(show_details=False):
-    username = os.getenv('CHECKWATT_USERNAME')
-    password = os.getenv('CHECKWATT_PASSWORD')
+    username = os.getenv("CHECKWATT_USERNAME")
+    password = os.getenv("CHECKWATT_PASSWORD")
 
     # Create the async class
     async with CheckwattManager(username, password) as check_watt_instance:
