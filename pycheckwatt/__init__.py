@@ -1068,8 +1068,8 @@ class CheckwattManager:
         revenue = 0
         if self.revenue is not None:
             if len(self.revenue["Revenue"]) > 0:
-                if "NetRevenue" in self.revenue[0]:
-                    revenue = self.revenue[0]["NetRevenue"]
+                if "NetRevenue" in self.revenue["Revenue"][0]:
+                    revenue = self.revenue["Revenue"][0]["NetRevenue"]
 
         return revenue
 
