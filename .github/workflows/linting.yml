@@ -32,6 +32,6 @@ jobs:
 
       - name: Run linters
         run: |
-          poetry run isort --check-only .
-          poetry run black --check .
-          poetry run flake8 .
+          poetry run isort --check-only pycheckwatt/
+          poetry run black --check pycheckwatt/
+          poetry run flake8 pycheckwatt/
