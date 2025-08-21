@@ -238,6 +238,20 @@ For developers who prefer not to install Python locally, a Docker-based developm
 
 Inside the container local code changes are automatically synced and you can run standard Python development commands.
 
+### Development Tools
+
+You can run various development tools locally using Docker Compose without installing Python or the tools on your system:
+
+```bash
+# Run isort to check import sorting
+docker compose -f docker-compose.dev.yml run --rm --build pycheckwatt-dev poetry run isort --check-only --diff .
+
+# Run black to format code
+docker compose -f docker-compose.dev.yml run --rm --build pycheckwatt-dev poetry run black --check --diff .
+
+# Run flake8 for linting
+docker compose -f docker-compose.dev.yml run --rm --build pycheckwatt-dev poetry run flake8 .
+```
 
 
 # Acknowledgements
