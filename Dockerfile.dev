@@ -6,10 +6,7 @@ RUN pip install --no-cache-dir poetry
 COPY pyproject.toml poetry.lock ./
 
 RUN poetry config virtualenvs.create false \
-    && poetry install --only main --no-root --no-interaction --no-ansi
-
-# Dev dependencies
-RUN pip install black flake8
+    && poetry install --no-root --no-interaction --no-ansi
 
 ENV PYTHONPATH="${PYTHONPATH}:/app"
 
