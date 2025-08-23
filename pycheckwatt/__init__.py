@@ -51,7 +51,9 @@ class CheckwattManager:
         backoff_max: float = 30.0,
         clock_skew_seconds: int = 10,
         max_concurrent_requests: int = 5,
-        killswitch_ttl_seconds: int = 900
+        killswitch_ttl_seconds: int = 900,
+        enhanced_error_logging: bool = True,
+        error_log_level: int = logging.ERROR
     ) -> None:
         """Initialize the CheckWatt manager."""
         if username is None or password is None:
@@ -81,6 +83,10 @@ class CheckwattManager:
         self.clock_skew_seconds = clock_skew_seconds
         self.max_concurrent_requests = max_concurrent_requests
         self.killswitch_ttl_seconds = killswitch_ttl_seconds
+        
+        # Enhanced error logging configuration
+        self.enhanced_error_logging = enhanced_error_logging
+        self.error_log_level = error_log_level
         
         # Kill-switch cache
         self._killswitch_cache = {"enabled": None, "last_check": 0}
@@ -254,6 +260,40 @@ class CheckwattManager:
             _LOGGER.info("Performing password login")
             return await self.login()
 
+    def _get_calling_method_name(self) -> Optional[str]:
+        """Get the name of the calling method for enhanced error logging."""
+        if not self.enhanced_error_logging:
+            return None
+        
+        try:
+            import inspect
+            # Get the call stack and find the first method that's not internal
+            frame = inspect.currentframe()
+            while frame:
+                frame = frame.f_back
+                if frame and frame.f_code.co_name in [
+                    '_request', 'handle_client_error', '_get_calling_method_name'
+                ]:
+                    continue
+                if frame and frame.f_code.co_name.startswith('_'):
+                    continue
+                if frame and frame.f_code.co_name in [
+                    'get_customer_details', 'get_site_id', 'get_fcrd_month_net_revenue',
+                    'get_fcrd_today_net_revenue', 'get_fcrd_year_net_revenue',
+                    'fetch_and_return_net_revenue', 'get_power_data', 'get_energy_flow',
+                    'get_ems_settings', 'get_price_zone', 'get_spot_price',
+                    'get_battery_month_peak_effect', 'get_energy_trading_company',
+                    'get_rpi_data', 'get_meter_status'
+                ]:
+                    return frame.f_code.co_name
+                if frame:
+                    frame = frame.f_back
+        except Exception:
+            # If we can't determine the method name, fall back to None
+            pass
+        
+        return None
+
     async def _request(
         self, 
         method: str, 
@@ -264,6 +304,7 @@ class CheckwattManager:
         retry_on_401: bool = True,
         retry_on_429: bool = True,
         timeout: int = 10,
+        method_name: Optional[str] = None,
         **kwargs
     ) -> Union[Dict[str, Any], str, bool, None]:
         """
@@ -277,6 +318,7 @@ class CheckwattManager:
             retry_on_401: Whether to retry on 401 (with refresh/login)
             retry_on_429: Whether to retry on 429 (with backoff)
             timeout: Request timeout in seconds
+            method_name: Name of the calling API method for enhanced error logging
             **kwargs: Additional arguments for the request
             
         Returns:
@@ -286,6 +328,10 @@ class CheckwattManager:
         if auth_required:
             if not await self._ensure_token():
                 return False
+        
+        # Auto-detect method name if not provided
+        if method_name is None:
+            method_name = self._get_calling_method_name()
         
         # Prepare headers
         final_headers = {**self._get_headers(), **(headers or {})}
@@ -355,7 +401,17 @@ class CheckwattManager:
                                 # Add jitter (0 to 0.25s)
                                 wait_time += random.uniform(0, 0.25)
                             
-                            _LOGGER.info("Rate limited (429), waiting %.2f seconds before retry", wait_time)
+                            # Enhanced logging for rate limiting
+                            if self.enhanced_error_logging and method_name:
+                                _LOGGER.log(
+                                    self.error_log_level,
+                                    "API call '%s' rate limited (HTTP 429 Too Many Requests), "
+                                    "waiting %.2f seconds before retry %d/%d",
+                                    method_name, wait_time, attempt + 1, self.max_retries_429 + 1
+                                )
+                            else:
+                                _LOGGER.info("Rate limited (429), waiting %.2f seconds before retry", wait_time)
+                            
                             await asyncio.sleep(wait_time)
                             continue
                         
@@ -378,15 +434,40 @@ class CheckwattManager:
                         # This will be handled in the next iteration
                         continue
                     else:
-                        _LOGGER.error("Request failed with status %d: %s", e.status, e)
+                        # Enhanced error logging for HTTP errors
+                        if self.enhanced_error_logging and method_name:
+                            _LOGGER.log(
+                                self.error_log_level,
+                                "API call '%s' failed: HTTP %d %s",
+                                method_name, e.status, e.message or "Unknown Error"
+                            )
+                        else:
+                            _LOGGER.error("Request failed with status %d: %s", e.status, e)
+                        
                         return await self.handle_client_error(endpoint, safe_headers, e)
                         
                 except (ClientError, asyncio.TimeoutError) as error:
-                    _LOGGER.error("Request failed: %s", error)
+                    # Enhanced error logging for network/connection errors
+                    if self.enhanced_error_logging and method_name:
+                        _LOGGER.log(
+                            self.error_log_level,
+                            "API call '%s' failed: %s",
+                            method_name, error
+                        )
+                    else:
+                        _LOGGER.error("Request failed: %s", error)
+                    
                     return await self.handle_client_error(endpoint, safe_headers, error)
             
             # If we get here, we've exhausted all retries
-            _LOGGER.error("Request failed after %d attempts", self.max_retries_429 + 1)
+            if self.enhanced_error_logging and method_name:
+                _LOGGER.log(
+                    self.error_log_level,
+                    "API call '%s' failed after %d attempts",
+                    method_name, self.max_retries_429 + 1
+                )
+            else:
+                _LOGGER.error("Request failed after %d attempts", self.max_retries_429 + 1)
             return False
 
     async def _continue_kill_switch_not_enabled(self):
@@ -435,12 +516,33 @@ class CheckwattManager:
         safe_headers = {k: v for k, v in headers.items() 
                        if k.lower() not in ['authorization', 'cookie']}
         
-        _LOGGER.error(
-            "An error occurred during the request. URL: %s, Headers: %s. Error: %s",
-            self.base_url + endpoint,
-            safe_headers,
-            error,
-        )
+        # Auto-detect method name for enhanced error logging
+        method_name = self._get_calling_method_name()
+        
+        # Enhanced error logging with method identification
+        if self.enhanced_error_logging and method_name:
+            # Extract HTTP status code and reason if available
+            if hasattr(error, 'status'):
+                status_code = error.status
+                reason_phrase = getattr(error, 'message', 'Unknown Error')
+                _LOGGER.log(
+                    self.error_log_level,
+                    "API call '%s' failed: HTTP %d %s - URL: %s",
+                    method_name, status_code, reason_phrase, self.base_url + endpoint
+                )
+            else:
+                _LOGGER.log(
+                    self.error_log_level,
+                    "API call '%s' failed: %s - URL: %s",
+                    method_name, error, self.base_url + endpoint
+                )
+        else:
+            _LOGGER.error(
+                "An error occurred during the request. URL: %s, Headers: %s. Error: %s",
+                self.base_url + endpoint,
+                safe_headers,
+                error,
+            )
         return False
 
     async def login(self):
@@ -466,30 +568,92 @@ class CheckwattManager:
             }
 
             timeout_seconds = 10
-            async with self.session.post(
-                self.base_url + endpoint,
-                headers=headers,
-                json=payload,
-                timeout=timeout_seconds,
-            ) as response:
-                data = await response.json()
-                if response.status == 200:
-                    self.jwt_token = data.get("JwtToken")
-                    self.refresh_token = data.get("RefreshToken")
-                    self.refresh_token_expires = data.get("RefreshTokenExpires")
-                    _LOGGER.info("Successfully logged in to CheckWatt")
-                    return True
+            try:
+                async with self.session.post(
+                    self.base_url + endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout_seconds,
+                ) as response:
+                    data = await response.json()
+                    if response.status == 200:
+                        self.jwt_token = data.get("JwtToken")
+                        self.refresh_token = data.get("RefreshToken")
+                        self.refresh_token_expires = data.get("RefreshTokenExpires")
+                        _LOGGER.info("Successfully logged in to CheckWatt")
+                        return True
 
-                if response.status == 401:
-                    _LOGGER.error(
-                        "Unauthorized: Check your CheckWatt authentication credentials"
-                    )
+                    if response.status == 401:
+                        if self.enhanced_error_logging:
+                            _LOGGER.log(
+                                self.error_log_level,
+                                "API call 'login' failed: HTTP 401 Unauthorized"
+                            )
+                        else:
+                            _LOGGER.error(
+                                "Unauthorized: Check your CheckWatt authentication credentials"
+                            )
+                        return False
+
+                    if response.status == 429:
+                        if self.enhanced_error_logging:
+                            _LOGGER.log(
+                                self.error_log_level,
+                                "API call 'login' rate limited: HTTP 429 Too Many Requests"
+                            )
+                        else:
+                            _LOGGER.error("Rate limited: HTTP 429 Too Many Requests")
+                        return False
+
+                    if self.enhanced_error_logging:
+                        _LOGGER.log(
+                            self.error_log_level,
+                            "API call 'login' failed: HTTP %d Unknown Error",
+                            response.status
+                        )
+                    else:
+                        _LOGGER.error("Unexpected HTTP status code: %s", response.status)
                     return False
 
-                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
-                return False
+            except (ClientResponseError, ClientError) as error:
+                if self.enhanced_error_logging:
+                    if hasattr(error, 'status'):
+                        _LOGGER.log(
+                            self.error_log_level,
+                            "API call 'login' failed: HTTP %d %s",
+                            error.status, getattr(error, 'message', 'Unknown Error')
+                        )
+                    else:
+                        _LOGGER.log(
+                            self.error_log_level,
+                            "API call 'login' failed: %s",
+                            error
+                        )
+                return await self.handle_client_error(endpoint, headers, error)
+            except asyncio.TimeoutError as error:
+                if self.enhanced_error_logging:
+                    _LOGGER.log(
+                        self.error_log_level,
+                        "API call 'login' failed: %s",
+                        error
+                    )
+                return await self.handle_client_error(endpoint, headers, error)
+            except Exception as error:
+                if self.enhanced_error_logging:
+                    _LOGGER.log(
+                        self.error_log_level,
+                        "API call 'login' failed: %s",
+                        error
+                    )
+                return await self.handle_client_error(endpoint, headers, error)
 
-        except (ClientResponseError, ClientError) as error:
+        except Exception as error:
+            if self.enhanced_error_logging:
+                _LOGGER.log(
+                    self.error_log_level,
+                    "API call 'login' failed: %s",
+                    error
+                )
             return await self.handle_client_error(endpoint, headers, error)
 
     async def get_customer_details(self):
@@ -1036,6 +1200,10 @@ class CheckwattManager:
         try:
             if rpi_serial is None:
                 rpi_serial = self.rpi_serial
+
+            if rpi_serial is None:
+                _LOGGER.error("Invalid RpiSerial")
+                return False
 
             endpoint = f"/ems/service/Pending?Serial={rpi_serial}"
 
@@ -1617,11 +1785,11 @@ class CheckWattRankManager:
                         _LOGGER.debug("CheckWattRank Push Response: %s", result)
 
             except ClientError as e:
-                _LOGGER.error("Error pushing data to CheckWattRank: %s", e)
+                _LOGGER.error("API call 'push_to_checkwatt_rank' failed: %s", e)
 
             except TimeoutError:
                 _LOGGER.error(
-                    "Request to CheckWattRank timed out after %s seconds",
+                    "API call 'push_to_checkwatt_rank' timed out after %s seconds",
                     timeout_seconds,
                 )
         return False
@@ -1674,12 +1842,12 @@ class CheckWattRankManager:
                         status = f"Failed to post data. Status code: {response.status}"
 
             except ClientError as e:
-                _LOGGER.error("Error pushing data to CheckWattRank: %s", e)
+                _LOGGER.error("API call 'push_history_to_checkwatt_rank' failed: %s", e)
                 status = f"Failed to push historical data. Error {e}"
 
             except TimeoutError:
                 _LOGGER.error(
-                    "Request to CheckWattRank timed out after %s seconds",
+                    "API call 'push_history_to_checkwatt_rank' timed out after %s seconds",
                     timeout_seconds,
                 )
                 status = "Timeout pushing historical data."

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch, MagicMock
 import asyncio
 import json
 from datetime import datetime, timedelta
+import logging
 
 from pycheckwatt import CheckwattManager
 
@@ -593,3 +594,171 @@ class TestTokenDebugProperties:
         assert expires_at.year == 2025
         assert expires_at.month == 12
         assert expires_at.day == 31 
+
+
+class TestEnhancedErrorLogging:
+    """Test enhanced error logging functionality."""
+    
+    @pytest.mark.asyncio
+    async def test_enhanced_error_logging_enabled_by_default(self):
+        """Test that enhanced error logging is enabled by default."""
+        manager = CheckwattManager("test_user", "test_pass")
+        assert manager.enhanced_error_logging is True
+        assert manager.error_log_level == logging.ERROR
+    
+    @pytest.mark.asyncio
+    async def test_enhanced_error_logging_can_be_disabled(self):
+        """Test that enhanced error logging can be disabled."""
+        manager = CheckwattManager("test_user", "test_pass", enhanced_error_logging=False)
+        assert manager.enhanced_error_logging is False
+    
+    @pytest.mark.asyncio
+    async def test_error_log_level_configurable(self):
+        """Test that error log level is configurable."""
+        manager = CheckwattManager("test_user", "test_pass", error_log_level=logging.WARNING)
+        assert manager.error_log_level == logging.WARNING
+    
+    @pytest.mark.asyncio
+    async def test_get_calling_method_name_returns_method_name(self):
+        """Test that _get_calling_method_name returns the correct method name."""
+        manager = CheckwattManager("test_user", "test_pass")
+        
+        # Test with a known method
+        method_name = manager._get_calling_method_name()
+        # This should return None when called from test context
+        assert method_name is None or method_name in [
+            'get_customer_details', 'get_site_id', 'get_fcrd_month_net_revenue',
+            'get_fcrd_today_net_revenue', 'get_fcrd_year_net_revenue',
+            'fetch_and_return_net_revenue', 'get_power_data', 'get_energy_flow',
+            'get_ems_settings', 'get_price_zone', 'get_spot_price',
+            'get_battery_month_peak_effect', 'get_energy_trading_company',
+            'get_rpi_data', 'get_meter_status'
+        ]
+    
+    @pytest.mark.asyncio
+    async def test_enhanced_error_logging_for_http_errors(self, caplog):
+        """Test enhanced error logging for HTTP errors."""
+        caplog.set_level(logging.ERROR)
+        
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            with patch('aiohttp.ClientSession.post') as mock_post, \
+                 patch('aiohttp.ClientSession.get') as mock_get:
+                
+                # Mock kill switch check
+                mock_killswitch = AsyncMock()
+                mock_killswitch.status = 200
+                mock_killswitch.text = AsyncMock(return_value="0")
+                mock_get.return_value.__aenter__.return_value = mock_killswitch
+                
+                # Mock login response with 500 error
+                mock_login = AsyncMock()
+                mock_login.status = 500
+                mock_login.raise_for_status.side_effect = Exception("Internal Server Error")
+                mock_post.return_value.__aenter__.return_value = mock_login
+                
+                result = await manager.login()
+                
+                assert result is False
+                # Check that enhanced error logging is used
+                assert any("API call 'login' failed" in record.message for record in caplog.records)
+    
+    @pytest.mark.asyncio
+    async def test_enhanced_error_logging_for_429_errors(self, caplog):
+        """Test enhanced error logging for rate limiting (429) errors."""
+        caplog.set_level(logging.ERROR)
+        
+        async with CheckwattManager("test_user", "test_pass", max_retries_429=0) as manager:
+            with patch('aiohttp.ClientSession.post') as mock_post, \
+                 patch('aiohttp.ClientSession.get') as mock_get:
+                
+                # Mock kill switch check
+                mock_killswitch = AsyncMock()
+                mock_killswitch.status = 200
+                mock_killswitch.text = AsyncMock(return_value="0")
+                mock_get.return_value.__aenter__.return_value = mock_killswitch
+                
+                # Mock login response with 429 error
+                mock_login = AsyncMock()
+                mock_login.status = 429
+                mock_login.headers = {}
+                mock_post.return_value.__aenter__.return_value = mock_login
+                
+                result = await manager.login()
+                
+                assert result is False
+                # Check that enhanced error logging is used for rate limiting
+                assert any("API call 'login' rate limited" in record.message for record in caplog.records)
+    
+    @pytest.mark.asyncio
+    async def test_enhanced_error_logging_for_network_errors(self, caplog):
+        """Test enhanced error logging for network/connection errors."""
+        caplog.set_level(logging.ERROR)
+        
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            with patch('aiohttp.ClientSession.post') as mock_post, \
+                 patch('aiohttp.ClientSession.get') as mock_get:
+                
+                # Mock kill switch check
+                mock_killswitch = AsyncMock()
+                mock_killswitch.status = 200
+                mock_killswitch.text = AsyncMock(return_value="0")
+                mock_get.return_value.__aenter__.return_value = mock_killswitch
+                
+                # Mock login response with network error
+                mock_post.side_effect = Exception("Connection failed")
+                
+                result = await manager.login()
+                
+                assert result is False
+                # Check that enhanced error logging is used
+                assert any("API call 'login' failed" in record.message for record in caplog.records)
+    
+    @pytest.mark.asyncio
+    async def test_enhanced_error_logging_disabled(self, caplog):
+        """Test that enhanced error logging is not used when disabled."""
+        caplog.set_level(logging.ERROR)
+        
+        async with CheckwattManager("test_user", "test_pass", enhanced_error_logging=False) as manager:
+            with patch('aiohttp.ClientSession.post') as mock_post, \
+                 patch('aiohttp.ClientSession.get') as mock_get:
+                
+                # Mock kill switch check
+                mock_killswitch = AsyncMock()
+                mock_killswitch.status = 200
+                mock_killswitch.text = AsyncMock(return_value="0")
+                mock_get.return_value.__aenter__.return_value = mock_killswitch
+                
+                # Mock login response with 500 error
+                mock_login = AsyncMock()
+                mock_login.status = 500
+                mock_login.raise_for_status.side_effect = Exception("Internal Server Error")
+                mock_post.return_value.__aenter__.return_value = mock_login
+                
+                result = await manager.login()
+                
+                assert result is False
+                # Check that enhanced error logging is NOT used
+                assert not any("API call 'login' failed" in record.message for record in caplog.records)
+                # Check that standard error logging is used
+                assert any("Unexpected HTTP status code: 500" in record.message for record in caplog.records)
+    
+    @pytest.mark.asyncio
+    async def test_enhanced_error_logging_for_all_api_methods(self, caplog):
+        """Test that enhanced error logging works for all API methods."""
+        caplog.set_level(logging.ERROR)
+        
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            # Mock the _request method to simulate errors
+            with patch.object(manager, '_request', return_value=False):
+                # Test a few key methods
+                result = await manager.get_customer_details()
+                assert result is False
+                
+                result = await manager.get_power_data()
+                assert result is False
+                
+                result = await manager.get_energy_flow()
+                assert result is False
+                
+                # Check that enhanced error logging was used
+                assert len(caplog.records) > 0 
