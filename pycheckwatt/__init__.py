@@ -602,6 +602,9 @@ class CheckwattManager:
         misseddays = 0
         try:
             site_id = await self.get_site_id()
+            if not site_id or site_id is False:
+                return False
+            
             from_date = datetime.now().strftime("%Y-%m-01")
             to_date = datetime.now() + timedelta(days=1)
             to_date = to_date.strftime("%Y-%m-%d")
@@ -650,6 +653,9 @@ class CheckwattManager:
         """Fetch FCR-D revenues from CheckWatt."""
         try:
             site_id = await self.get_site_id()
+            if not site_id or site_id is False:
+                return False
+
             from_date = datetime.now().strftime("%Y-%m-%d")
             end_date = datetime.now() + timedelta(days=2)
             to_date = end_date.strftime("%Y-%m-%d")
@@ -672,6 +678,9 @@ class CheckwattManager:
     async def get_fcrd_year_net_revenue(self):
         """Fetch FCR-D revenues from CheckWatt."""
         site_id = await self.get_site_id()
+        if not site_id or site_id is False:
+            return False
+        
         yesterday_date = datetime.now() + timedelta(days=1)
         yesterday_date = yesterday_date.strftime("-%m-%d")
         months = ["-01-01", "-06-30", "-07-01", yesterday_date]
@@ -694,11 +703,10 @@ class CheckwattManager:
                 for each in self.revenueyear["Revenue"]:
                     self.revenueyeartotal += each["NetRevenue"]
                 retval = True
-                
                 return retval
 
             except Exception as error:
-                _LOGGER.error("Error in get_fcrd_year_net_revenue: %s", error)
+                _LOGGER.error("Error in get_fcrd_year_net_revenue (first half): %s", error)
                 return False
         else:
             try:
@@ -717,17 +725,20 @@ class CheckwattManager:
                         self.revenueyeartotal += each["NetRevenue"]
                     loop += 2
                     retval = True
-                    
+                
                 return retval
 
             except Exception as error:
-                _LOGGER.error("Error in get_fcrd_year_net_revenue: %s", error)
+                _LOGGER.error("Error in get_fcrd_year_net_revenue (multiple periods): %s", error)
                 return False
 
     async def fetch_and_return_net_revenue(self, from_date, to_date):
         """Fetch FCR-D revenues from CheckWatt as per provided range."""
         try:
             site_id = await self.get_site_id()
+            if not site_id or site_id is False:
+                return None
+            
             # Validate date format and ensure they are dates
             date_format = "%Y-%m-%d"
             try:
@@ -764,12 +775,13 @@ class CheckwattManager:
 
             result = await self._request("GET", endpoint, auth_required=True)
             if result is False:
+                _LOGGER.error("Failed to retrieve custom revenue range from endpoint: %s", endpoint)
                 return None
             
             return result
 
         except Exception as error:
-            _LOGGER.error("Error in fetchand_return_net_revenue: %s", error)
+            _LOGGER.error("Error in fetch_and_return_net_revenue: %s", error)
             return None
 
     def _extract_content_and_logbook(self, input_string):
@@ -856,6 +868,9 @@ class CheckwattManager:
         """Fetch FCR-D revenues from CheckWatt as per provided range."""
         try:
             site_id = await self.get_site_id()
+            if not site_id or site_id is False:
+                return None
+            
             # Validate date format and ensure they are dates
             date_format = "%Y-%m-%d"
             try:
@@ -1336,17 +1351,19 @@ class CheckwattManager:
     @property
     def rpi_serial(self):
         """Property for Rpi Serial."""
-        if self.rpi_data is not None:
-            meters = self.rpi_data.get("Meters", [])
-            for meter in meters:
-                if "RPi" in meter:
-                    return meter["RPi"].upper()
-
+        # Prioritize customer_details since it's loaded first and contains the RPI serial
         if self.customer_details is not None:
             meters = self.customer_details.get("Meter", [])
             for meter in meters:
                 if "RpiSerial" in meter:
                     return meter["RpiSerial"].upper()
+
+        # Fallback to rpi_data if available
+        if self.rpi_data is not None:
+            meters = self.rpi_data.get("Meters", [])
+            for meter in meters:
+                if "RPi" in meter:
+                    return meter["RPi"].upper()
 
         _LOGGER.warning("Unable to find RPi Serial")
         return None
