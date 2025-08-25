@@ -91,6 +91,16 @@ class CheckwattManager:
         # Kill-switch cache
         self._killswitch_cache = {"enabled": None, "last_check": 0}
         
+        # Authentication statistics
+        self._auth_stats = {
+            "password_logins": 0,
+            "token_refreshes": 0,
+            "requests_with_jwt": 0,
+            "requests_with_password": 0,
+            "last_auth_method": None,
+            "total_requests": 0
+        }
+        
         # Data properties (existing)
         self.dailyaverage = 0
         self.monthestimate = 0
@@ -153,15 +163,84 @@ class CheckwattManager:
             "X-pyCheckwatt-Application": self.header_identifier,
         }
 
+    def _log_auth_state(self, context: str = "Current"):
+        """Log the current authentication state for debugging."""
+        _LOGGER.debug("%s authentication state:", context)
+        _LOGGER.debug("  JWT token: %s", "Present" if self.jwt_token else "None")
+        _LOGGER.debug("  Refresh token: %s", "Present" if self.refresh_token else "None")
+        _LOGGER.debug("  Refresh token expires: %s", self.refresh_token_expires or "None")
+        
+        if self.jwt_token:
+            try:
+                parts = self.jwt_token.split('.')
+                if len(parts) == 3:
+                    payload = base64.urlsafe_b64decode(parts[1] + '==').decode('utf-8')
+                    claims = json.loads(payload)
+                    exp = claims.get('exp')
+                    if exp:
+                        now = datetime.utcnow().timestamp()
+                        time_until_expiry = exp - now
+                        _LOGGER.debug("  JWT expires in: %.1f seconds", time_until_expiry)
+                    else:
+                        _LOGGER.debug("  JWT expiration: Not found in claims")
+                else:
+                    _LOGGER.debug("  JWT format: Invalid (expected 3 parts)")
+            except Exception as e:
+                _LOGGER.debug("  JWT expiration: Could not decode (%s)", e)
+        
+        if self.refresh_token_expires:
+            try:
+                expires = datetime.fromisoformat(self.refresh_token_expires.replace('Z', '+00:00'))
+                now = datetime.now(expires.tzinfo) if expires.tzinfo else datetime.utcnow()
+                time_until_expiry = expires - now
+                _LOGGER.debug("  Refresh expires in: %s", time_until_expiry)
+            except Exception as e:
+                _LOGGER.debug("  Refresh expiration: Could not parse (%s)", e)
+
+    def _log_auth_stats(self, context: str = "Current"):
+        """Log authentication statistics for debugging."""
+        _LOGGER.debug("%s authentication statistics:", context)
+        _LOGGER.debug("  Password logins: %d", self._auth_stats["password_logins"])
+        _LOGGER.debug("  Token refreshes: %d", self._auth_stats["token_refreshes"])
+        _LOGGER.debug("  Requests with JWT: %d", self._auth_stats["requests_with_jwt"])
+        _LOGGER.debug("  Requests with password: %d", self._auth_stats["requests_with_password"])
+        _LOGGER.debug("  Last auth method: %s", self._auth_stats["last_auth_method"] or "None")
+
+    def _maybe_log_auth_stats(self):
+        """Log authentication statistics every 10 requests for monitoring."""
+        self._auth_stats["total_requests"] += 1
+        
+        # Log stats every 10 requests
+        if self._auth_stats["total_requests"] % 10 == 0:
+            self._log_auth_stats(f"Periodic (every 10 requests, total: {self._auth_stats['total_requests']})")
+
+    def get_auth_statistics(self) -> Dict[str, Any]:
+        """Get current authentication statistics for monitoring."""
+        return self._auth_stats.copy()
+
+    def reset_auth_statistics(self):
+        """Reset authentication statistics to zero."""
+        _LOGGER.info("Resetting authentication statistics")
+        self._auth_stats = {
+            "password_logins": 0,
+            "token_refreshes": 0,
+            "requests_with_jwt": 0,
+            "requests_with_password": 0,
+            "last_auth_method": None,
+            "total_requests": 0
+        }
+
     def _jwt_is_valid(self) -> bool:
         """Check if JWT token is valid and not expiring soon."""
         if not self.jwt_token:
+            _LOGGER.debug("No JWT token available for validation")
             return False
         
         try:
             # Simple JWT expiration check - decode the payload part
             parts = self.jwt_token.split('.')
             if len(parts) != 3:
+                _LOGGER.debug("JWT token has invalid format (expected 3 parts, got %d)", len(parts))
                 return False
             
             # Decode the payload (second part)
@@ -170,19 +249,34 @@ class CheckwattManager:
             
             exp = claims.get('exp')
             if not exp:
+                _LOGGER.debug("JWT token missing expiration claim")
                 return False
             
             # Check if token expires within clock skew
             now = datetime.utcnow().timestamp()
-            return now < (exp - self.clock_skew_seconds)
+            time_until_expiry = exp - now
+            clock_skew_buffer = self.clock_skew_seconds
             
-        except (ValueError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
+            if time_until_expiry <= clock_skew_buffer:
+                _LOGGER.debug("JWT token expires in %.1f seconds (within %.1f second buffer), considered invalid", 
+                             time_until_expiry, clock_skew_buffer)
+                return False
+            
+            _LOGGER.debug("JWT token valid, expires in %.1f seconds", time_until_expiry)
+            return True
+            
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+            _LOGGER.debug("Error validating JWT token: %s", e)
             # If we can't decode, treat as unknown validity
             return False
 
     def _refresh_is_valid(self) -> bool:
         """Check if refresh token is valid and not expired."""
         if not self.refresh_token or not self.refresh_token_expires:
+            if not self.refresh_token:
+                _LOGGER.debug("No refresh token available for validation")
+            if not self.refresh_token_expires:
+                _LOGGER.debug("No refresh token expiration timestamp available")
             return False
         
         try:
@@ -191,16 +285,30 @@ class CheckwattManager:
             now = datetime.now(expires.tzinfo) if expires.tzinfo else datetime.utcnow()
             
             # Add some buffer (5 minutes) to avoid edge cases
-            return now < (expires - timedelta(minutes=5))
+            buffer_minutes = 5
+            buffer_time = timedelta(minutes=buffer_minutes)
+            time_until_expiry = expires - now
             
-        except (ValueError, TypeError):
+            if time_until_expiry <= buffer_time:
+                _LOGGER.debug("Refresh token expires in %s (within %d minute buffer), considered invalid", 
+                             time_until_expiry, buffer_minutes)
+                return False
+            
+            _LOGGER.debug("Refresh token valid, expires in %s", time_until_expiry)
+            return True
+            
+        except (ValueError, TypeError) as e:
+            _LOGGER.debug("Error validating refresh token: %s", e)
             # If we can't parse, treat as unknown validity
             return False
 
     async def _refresh(self) -> bool:
         """Refresh the JWT token using the refresh token."""
         if not self.refresh_token:
+            _LOGGER.debug("No refresh token available for token refresh")
             return False
+        
+        _LOGGER.info("Attempting to refresh JWT token using refresh token")
         
         try:
             endpoint = "/user/RefreshToken?audience=eib"
@@ -208,6 +316,8 @@ class CheckwattManager:
                 **self._get_headers(),
                 "authorization": f"RefreshToken {self.refresh_token}",
             }
+            
+            _LOGGER.debug("Making refresh token request to %s", endpoint)
             
             async with self.session.get(
                 self.base_url + endpoint, 
@@ -218,6 +328,10 @@ class CheckwattManager:
                     data = await response.json()
                     
                     # Update tokens
+                    old_jwt = self.jwt_token
+                    old_refresh = self.refresh_token
+                    old_refresh_expires = self.refresh_token_expires
+                    
                     self.jwt_token = data.get("JwtToken")
                     if "RefreshToken" in data:
                         self.refresh_token = data.get("RefreshToken")
@@ -225,10 +339,31 @@ class CheckwattManager:
                         self.refresh_token_expires = data.get("RefreshTokenExpires")
                     
                     _LOGGER.info("Successfully refreshed JWT token")
+                    _LOGGER.debug("Token refresh details: JWT changed=%s, Refresh changed=%s, Expires changed=%s", 
+                                 old_jwt != self.jwt_token, 
+                                 old_refresh != self.refresh_token,
+                                 old_refresh_expires != self.refresh_token_expires)
+                    
+                    if self.refresh_token_expires:
+                        try:
+                            expires = datetime.fromisoformat(self.refresh_token_expires.replace('Z', '+00:00'))
+                            now = datetime.now(expires.tzinfo) if expires.tzinfo else datetime.utcnow()
+                            time_until_expiry = expires - now
+                            _LOGGER.debug("New refresh token expires in %s", time_until_expiry)
+                        except (ValueError, TypeError):
+                            _LOGGER.debug("Could not parse new refresh token expiration time")
+                    
+                    # Log final authentication state
+                    self._log_auth_state("After successful token refresh")
+                    
+                    # Update statistics
+                    self._auth_stats["token_refreshes"] += 1
+                    self._auth_stats["last_auth_method"] = "refresh"
+                    
                     return True
                 
                 elif response.status == 401:
-                    _LOGGER.warning("Refresh token expired or invalid")
+                    _LOGGER.warning("Refresh token expired or invalid (HTTP 401)")
                     return False
                 
                 else:
@@ -241,24 +376,43 @@ class CheckwattManager:
 
     async def _ensure_token(self) -> bool:
         """Ensure we have a valid JWT token, refreshing or logging in if needed."""
+        _LOGGER.debug("Ensuring valid authentication token")
+        self._log_auth_state("Before ensuring token")
+        
         # Quick check without lock
         if self.jwt_token and self._jwt_is_valid():
+            _LOGGER.debug("JWT token is valid, no authentication needed")
             return True
+        
+        _LOGGER.debug("JWT token invalid or missing, need to authenticate")
         
         # Need to acquire lock for auth operations
         async with self._auth_lock:
+            _LOGGER.debug("Acquired authentication lock")
+            
             # Double-check after acquiring lock
             if self.jwt_token and self._jwt_is_valid():
+                _LOGGER.debug("JWT token became valid while waiting for lock")
                 return True
             
             # Try refresh first
             if self.refresh_token and self._refresh_is_valid():
+                _LOGGER.info("Attempting token refresh before password login")
                 if await self._refresh():
+                    _LOGGER.debug("Token refresh successful, authentication complete")
+                    self._log_auth_state("After token refresh")
                     return True
+                else:
+                    _LOGGER.debug("Token refresh failed, will fall back to password login")
+            else:
+                _LOGGER.debug("Refresh token not available or expired, skipping refresh attempt")
             
             # Fall back to login
             _LOGGER.info("Performing password login")
-            return await self.login()
+            result = await self.login()
+            if result:
+                self._log_auth_state("After password login")
+            return result
 
     def _get_calling_method_name(self) -> Optional[str]:
         """Get the name of the calling method for enhanced error logging."""
@@ -326,8 +480,16 @@ class CheckwattManager:
         """
         # Ensure we have a valid token if auth is required
         if auth_required:
+            _LOGGER.debug("Request requires authentication, ensuring valid token")
             if not await self._ensure_token():
+                _LOGGER.error("Failed to obtain valid authentication token")
                 return False
+            _LOGGER.debug("Authentication token validated successfully")
+        else:
+            _LOGGER.debug("Request does not require authentication")
+        
+        # Log authentication statistics periodically
+        self._maybe_log_auth_stats()
         
         # Auto-detect method name if not provided
         if method_name is None:
@@ -335,8 +497,18 @@ class CheckwattManager:
         
         # Prepare headers
         final_headers = {**self._get_headers(), **(headers or {})}
+        auth_method = "None"
         if auth_required and self.jwt_token:
             final_headers["authorization"] = f"Bearer {self.jwt_token}"
+            auth_method = "JWT Bearer"
+            self._auth_stats["requests_with_jwt"] += 1
+            self._auth_stats["last_auth_method"] = "jwt"
+            _LOGGER.debug("Using JWT Bearer authentication for request")
+        elif auth_required:
+            auth_method = "Password-based"
+            self._auth_stats["requests_with_password"] += 1
+            self._auth_stats["last_auth_method"] = "password"
+            _LOGGER.debug("Using password-based authentication for request")
         
         # Remove sensitive headers from logging
         safe_headers = {k: v for k, v in final_headers.items() 
@@ -347,8 +519,8 @@ class CheckwattManager:
             # Perform request with retry logic
             for attempt in range(self.max_retries_429 + 1):
                 try:
-                    _LOGGER.debug("Making %s request to %s (attempt %d)", 
-                                 method, endpoint, attempt + 1)
+                    _LOGGER.debug("Making %s request to %s (attempt %d, auth: %s)", 
+                                 method, endpoint, attempt + 1, auth_method)
                     
                     async with self.session.request(
                         method,
@@ -359,16 +531,20 @@ class CheckwattManager:
                     ) as response:
                         # Handle 401 (Unauthorized)
                         if response.status == 401 and retry_on_401 and auth_required:
-                            _LOGGER.warning("Received 401, attempting token refresh")
+                            _LOGGER.warning("Received 401 Unauthorized for %s request to %s, attempting token refresh", 
+                                           method, endpoint)
                             
                             # Try refresh first
+                            _LOGGER.info("Attempting token refresh due to 401 response")
                             if await self._refresh():
+                                _LOGGER.info("Token refresh successful, retrying original request")
                                 # Retry the original request once
                                 continue
                             
                             # If refresh failed, try login
-                            _LOGGER.warning("Refresh failed, attempting login")
+                            _LOGGER.warning("Token refresh failed, attempting password login")
                             if await self.login():
+                                _LOGGER.info("Password login successful, retrying original request")
                                 # Retry the original request once
                                 continue
                             
@@ -550,9 +726,11 @@ class CheckwattManager:
         try:
             if not await self._continue_kill_switch_not_enabled():
                 # CheckWatt want us to back down.
+                _LOGGER.warning("Login blocked by kill-switch")
                 return False
             _LOGGER.debug("Kill-switch not enabled, continue")
 
+            _LOGGER.info("Performing password-based authentication")
             credentials = f"{self.username}:{self.password}"
             encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
                 "utf-8"
@@ -567,6 +745,8 @@ class CheckwattManager:
                 "OneTimePassword": "",
             }
 
+            _LOGGER.debug("Making login request to %s with username %s", endpoint, self.username)
+            
             timeout_seconds = 10
             try:
                 async with self.session.post(
@@ -577,10 +757,49 @@ class CheckwattManager:
                 ) as response:
                     data = await response.json()
                     if response.status == 200:
+                        old_jwt = self.jwt_token
+                        old_refresh = self.refresh_token
+                        old_refresh_expires = self.refresh_token_expires
+                        
                         self.jwt_token = data.get("JwtToken")
                         self.refresh_token = data.get("RefreshToken")
                         self.refresh_token_expires = data.get("RefreshTokenExpires")
+                        
                         _LOGGER.info("Successfully logged in to CheckWatt")
+                        _LOGGER.debug("Login response: JWT present=%s, Refresh present=%s, Expires present=%s", 
+                                     bool(self.jwt_token), bool(self.refresh_token), bool(self.refresh_token_expires))
+                        
+                        if self.refresh_token_expires:
+                            try:
+                                expires = datetime.fromisoformat(self.refresh_token_expires.replace('Z', '+00:00'))
+                                now = datetime.now(expires.tzinfo) if expires.tzinfo else datetime.utcnow()
+                                time_until_expiry = expires - now
+                                _LOGGER.debug("Refresh token expires in %s", time_until_expiry)
+                            except (ValueError, TypeError):
+                                _LOGGER.debug("Could not parse refresh token expiration time")
+                        
+                        if self.jwt_token:
+                            try:
+                                # Decode JWT to get expiration
+                                parts = self.jwt_token.split('.')
+                                if len(parts) == 3:
+                                    payload = base64.urlsafe_b64decode(parts[1] + '==').decode('utf-8')
+                                    claims = json.loads(payload)
+                                    exp = claims.get('exp')
+                                    if exp:
+                                        now = datetime.utcnow().timestamp()
+                                        time_until_expiry = exp - now
+                                        _LOGGER.debug("JWT token expires in %.1f seconds", time_until_expiry)
+                            except (ValueError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
+                                _LOGGER.debug("Could not decode JWT token for expiration check")
+                        
+                        # Log final authentication state
+                        self._log_auth_state("After successful login")
+                        
+                        # Update statistics
+                        self._auth_stats["password_logins"] += 1
+                        self._auth_stats["last_auth_method"] = "password"
+                        
                         return True
 
                     if response.status == 401:
@@ -1085,62 +1304,6 @@ class CheckwattManager:
                 else:
                     self.fcrd_info = None
                 break  # stop so we get the first row in logbook
-
-
-
-
-
-
-
-    async def fetch_and_return_net_revenue(self, from_date, to_date):
-        """Fetch FCR-D revenues from CheckWatt as per provided range."""
-        try:
-            site_id = await self.get_site_id()
-            # Validate date format and ensure they are dates
-            date_format = "%Y-%m-%d"
-            try:
-                from_date = datetime.strptime(from_date, date_format).date()
-                to_date = datetime.strptime(to_date, date_format).date()
-            except ValueError:
-                raise ValueError(
-                    "Input dates must be valid dates with the format YYYY-MM-DD."
-                )
-
-            # Validate from_date and to_date
-            today = date.today()
-            six_months_ago = today - relativedelta(months=6)
-
-            if not (six_months_ago <= from_date <= today):
-                raise ValueError(
-                    "From date must be within the last 6 months and not beyond today."
-                )
-
-            if not (six_months_ago <= to_date <= today):
-                raise ValueError(
-                    "To date must be within the last 6 months and not beyond today."
-                )
-
-            if from_date >= to_date:
-                raise ValueError("From date must be before To date.")
-
-            # Extend to_date by one day
-            to_date += timedelta(days=1)
-
-            endpoint = (
-                f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
-            )
-
-            result = await self._request("GET", endpoint, auth_required=True)
-            if result is False:
-                return None
-            
-            return result
-
-        except Exception as error:
-            _LOGGER.error("Error in fetchand_return_net_revenue: %s", error)
-            return None
-
-
 
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
