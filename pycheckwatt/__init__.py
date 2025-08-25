@@ -49,7 +49,7 @@ class CheckwattManager:
         backoff_base: float = 0.5,
         backoff_factor: float = 2.0,
         backoff_max: float = 30.0,
-        clock_skew_seconds: int = 60,
+        clock_skew_seconds: int = 10,
         max_concurrent_requests: int = 5,
         killswitch_ttl_seconds: int = 900
     ) -> None:
