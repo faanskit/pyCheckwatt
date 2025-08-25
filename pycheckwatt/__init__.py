@@ -405,7 +405,12 @@ class CheckwattManager:
                 else:
                     _LOGGER.debug("Token refresh failed, will fall back to password login")
             else:
-                _LOGGER.debug("Refresh token not available or expired, skipping refresh attempt")
+                if not self.refresh_token:
+                    _LOGGER.debug("Refresh token not available, skipping refresh attempt")
+                elif not self._refresh_is_valid():
+                    _LOGGER.debug("Refresh token expired or invalid, skipping refresh attempt")
+                else:
+                    _LOGGER.debug("Refresh token validation failed for unknown reason, skipping refresh attempt")
             
             # Fall back to login
             _LOGGER.info("Performing password login")
