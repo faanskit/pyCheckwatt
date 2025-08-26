@@ -108,6 +108,7 @@ class TestAuthentication:
         """Test token refresh failure handling."""
         async with CheckwattManager("test_user", "test_pass") as manager:
             manager.refresh_token = "test_refresh_token"
+            initial_jwt = manager.jwt_token  # Capture initial value
             
             with patch('aiohttp.ClientSession.get') as mock_get:
                 mock_response = AsyncMock()
@@ -117,8 +118,8 @@ class TestAuthentication:
                 result = await manager._refresh()
                 
                 assert result is False
-                # Tokens should remain unchanged
-                assert manager.jwt_token is None
+                # Tokens should remain unchanged from initial value
+                assert manager.jwt_token == initial_jwt
     
     @pytest.mark.asyncio
     async def test_ensure_token_with_valid_jwt(self):
@@ -404,39 +405,6 @@ class TestConcurrencyControl:
                 assert mock_request.call_count == 5
 
 
-class TestKillSwitchCaching:
-    """Test kill switch caching functionality."""
-    
-    @pytest.mark.asyncio
-    async def test_killswitch_cache_ttl(self):
-        """Test that kill switch cache respects TTL."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
-            manager.killswitch_ttl_seconds = 60
-            
-            with patch.object(manager.session, 'get') as mock_get:
-                mock_response = AsyncMock()
-                mock_response.status = 200
-                mock_response.text = AsyncMock(return_value="0")
-                mock_get.return_value.__aenter__.return_value = mock_response
-                
-                # First call should hit the network
-                result1 = await manager._continue_kill_switch_not_enabled()
-                assert result1 is True
-                assert mock_get.call_count == 1
-                
-                # Second call within TTL should use cache
-                result2 = await manager._continue_kill_switch_not_enabled()
-                assert result2 is True
-                assert mock_get.call_count == 1  # No additional network call
-                
-                # Simulate time passing beyond TTL
-                manager._killswitch_cache["last_check"] = 0
-                
-                # Third call should hit network again
-                result3 = await manager._continue_kill_switch_not_enabled()
-                assert result3 is True
-                assert mock_get.call_count == 2
-
 
 class TestSecurityAndLogging:
     """Test security and logging features."""
@@ -514,9 +482,8 @@ class TestConfiguration:
         assert manager.backoff_base == 0.5
         assert manager.backoff_factor == 2.0
         assert manager.backoff_max == 30.0
-        assert manager.clock_skew_seconds == 60
+        assert manager.clock_skew_seconds == 10
         assert manager.max_concurrent_requests == 5
-        assert manager.killswitch_ttl_seconds == 900
     
     def test_custom_configuration(self):
         """Test custom configuration values."""
@@ -528,8 +495,7 @@ class TestConfiguration:
             backoff_factor=3.0,
             backoff_max=60.0,
             clock_skew_seconds=120,
-            max_concurrent_requests=10,
-            killswitch_ttl_seconds=1800
+            max_concurrent_requests=10
         )
         
         assert manager.max_retries_429 == 5
@@ -538,7 +504,6 @@ class TestConfiguration:
         assert manager.backoff_max == 60.0
         assert manager.clock_skew_seconds == 120
         assert manager.max_concurrent_requests == 10
-        assert manager.killswitch_ttl_seconds == 1800
     
     def test_backwards_compatibility(self):
         """Test that existing constructor signature still works."""

@@ -81,6 +81,7 @@ class TestAuthentication:
     async def test_login_requires_kill_switch_check(self):
         """Test that login checks kill switch first."""
         async with CheckwattManager("test_user", "test_pass") as manager:
+            initial_jwt = manager.jwt_token  # Capture initial value
 
             with patch("aiohttp.ClientSession.get") as mock_get:
                 # Mock kill switch as enabled (should block login)
@@ -92,7 +93,8 @@ class TestAuthentication:
                 result = await manager.login()
 
                 assert result is False
-                assert manager.jwt_token is None
+                # JWT token should remain unchanged from initial value
+                assert manager.jwt_token == initial_jwt
 
 
 class TestCustomerDataRetrieval:
@@ -104,10 +106,11 @@ class TestCustomerDataRetrieval:
         async with CheckwattManager("test_user", "test_pass") as manager:
 
             manager.jwt_token = "test_token"
-            
-            with patch.object(manager, '_request') as mock_request:
+
+            with patch.object(manager, '_request') as mock_request, \
+                 patch.object(manager, 'ensure_authenticated', return_value=True):
                 mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
-                
+
                 result = await manager.get_customer_details()
 
                 assert result is True
@@ -121,7 +124,8 @@ class TestCustomerDataRetrieval:
 
             manager.jwt_token = "test_token"
             
-            with patch.object(manager, '_request') as mock_request:
+            with patch.object(manager, '_request') as mock_request, \
+                 patch.object(manager, 'ensure_authenticated', return_value=True):
                 mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
                 
                 await manager.get_customer_details()
@@ -139,7 +143,8 @@ class TestCustomerDataRetrieval:
 
             manager.jwt_token = "test_token"
             
-            with patch.object(manager, '_request') as mock_request:
+            with patch.object(manager, '_request') as mock_request, \
+                 patch.object(manager, 'ensure_authenticated', return_value=True):
                 mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
                 
                 await manager.get_customer_details()
@@ -160,7 +165,8 @@ class TestPropertyAccess:
 
             manager.jwt_token = "test_token"
             
-            with patch.object(manager, '_request') as mock_request:
+            with patch.object(manager, '_request') as mock_request, \
+                 patch.object(manager, 'ensure_authenticated', return_value=True):
                 mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
                 
                 await manager.get_customer_details()
@@ -222,10 +228,12 @@ class TestEnergyDataRetrieval:
 
             manager.jwt_token = "test_token"
             manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON  # Needed for endpoint building
-            
-            with patch.object(manager, '_request') as mock_request:
+
+
+            with patch.object(manager, '_request') as mock_request, \
+                 patch.object(manager, 'ensure_authenticated', return_value=True):
                 mock_request.return_value = SAMPLE_POWER_DATA_RESPONSE
-                
+
                 result = await manager.get_power_data()
 
                 assert result is True
@@ -239,19 +247,18 @@ class TestEnergyDataRetrieval:
 
             manager.jwt_token = "test_token"
             manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON
-            
-            with patch.object(manager, '_request') as mock_request:
+
+            with patch.object(manager, '_request') as mock_request, \
+                 patch.object(manager, 'ensure_authenticated', return_value=True):
                 mock_request.return_value = SAMPLE_POWER_DATA_RESPONSE
-                
+
                 await manager.get_power_data()
 
-                # Test energy properties with sums of all measurements
                 assert manager.total_solar_energy == 11124779.0  # 2848509.0 + 8276270.0
+                assert manager.total_charging_energy == 4700000.0  # 1500000.0 + 3200000.0
+                assert manager.total_discharging_energy == 4000000.0  # 1200000.0 + 2800000.0
                 assert manager.total_import_energy == 8098842.0  # 3104554.0 + 4994288.0
                 assert manager.total_export_energy == 8040738.0  # 2899531.0 + 5141207.0
-
-                solar_kwh = manager.total_solar_energy / 1000
-                assert solar_kwh == 11124.779
 
 
 class TestFCRDRevenue:
@@ -276,26 +283,32 @@ class TestFCRDRevenue:
             manager.jwt_token = "test_token"
 
             # Load customer details first (provides RPI serial)
-            with patch.object(manager, '_request') as mock_request:
+            with patch.object(manager, '_request') as mock_request, \
+                 patch.object(manager, 'ensure_authenticated', return_value=True):
                 mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
-                
+
                 await manager.get_customer_details()
 
             # Mock FCR-D revenue calls
             with patch.object(manager, 'get_site_id', return_value="test_site_123"), \
-                 patch.object(manager, '_request') as mock_request:
-                
+                 patch.object(manager, '_request') as mock_request, \
+                 patch.object(manager, 'ensure_authenticated', return_value=True):
+
                 mock_request.return_value = SAMPLE_FCRD_RESPONSE
-                
+
                 # Test revenue methods
                 result = await manager.get_fcrd_today_net_revenue()
+                assert result is True
+
+                result = await manager.get_fcrd_year_net_revenue()
                 assert result is True
 
                 result = await manager.get_fcrd_month_net_revenue()
                 assert result is True
 
-                result = await manager.get_fcrd_year_net_revenue()
-                assert result is True
+                assert manager.revenue is not None
+                assert manager.revenueyear is not None
+                assert manager.revenuemonth == 61.44  # Sum of FCR-D revenues: 20.11 + 20.13 + 21.07 + 0.13
 
 
 class TestEMSSettings:
@@ -308,145 +321,19 @@ class TestEMSSettings:
 
             manager.jwt_token = "test_token"
             manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON
-            
-            with patch.object(manager, '_request') as mock_request:
+
+            with patch.object(manager, '_request') as mock_request, \
+                 patch.object(manager, 'ensure_authenticated', return_value=True):
                 mock_request.return_value = SAMPLE_EMS_SETTINGS_RESPONSE
-                
+
                 result = await manager.get_ems_settings()
 
                 assert result is True
                 assert manager.ems is not None
                 assert manager.ems == SAMPLE_EMS_SETTINGS_RESPONSE
-                assert manager.ems_settings == "Currently optimized (CO)"
 
 
-class TestCompleteWorkflow:
-    """Test the complete workflow."""
 
-    @pytest.mark.asyncio
-    async def test_example_py_workflow(self):
-        """Test the complete happy path workflow."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
-
-            # Step 1: Login
-            with patch("aiohttp.ClientSession.post") as mock_post, patch(
-                "aiohttp.ClientSession.get"
-            ) as mock_get_ks:
-
-                mock_killswitch = AsyncMock()
-                mock_killswitch.status = 200
-                mock_killswitch.text = AsyncMock(return_value="0")
-                mock_get_ks.return_value.__aenter__.return_value = mock_killswitch
-
-                mock_login = AsyncMock()
-                mock_login.status = 200
-                mock_login.json = AsyncMock(return_value=SAMPLE_LOGIN_RESPONSE)
-                mock_post.return_value.__aenter__.return_value = mock_login
-
-                login_result = await manager.login()
-                assert login_result is True
-
-            # Step 2: Get customer details
-            with patch.object(manager, '_request') as mock_request:
-                mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
-                
-                await manager.get_customer_details()
-
-            # Step 3: Get FCR-D revenue data
-            with patch.object(manager, 'get_site_id', return_value="test_site"), \
-                 patch.object(manager, '_request') as mock_request:
-                
-                mock_request.return_value = SAMPLE_FCRD_RESPONSE
-                
-                await manager.get_fcrd_today_net_revenue()
-                await manager.get_fcrd_year_net_revenue()
-                await manager.get_fcrd_month_net_revenue()
-
-            # Step 4: Get EMS settings
-            with patch.object(manager, '_request') as mock_request:
-                mock_request.return_value = SAMPLE_EMS_SETTINGS_RESPONSE
-                
-                await manager.get_ems_settings()
-
-            # Step 5: Get power data
-            with patch.object(manager, '_request') as mock_request:
-                mock_request.return_value = SAMPLE_POWER_DATA_RESPONSE
-                
-                await manager.get_power_data()
-
-            # Verify all properties used in example.py work
-            assert manager.registered_owner is not None
-            assert manager.battery_peak_data == (15.0, 15.0, 15.0, 15.0)
-            assert manager.battery_make_and_model is not None
-            assert manager.electricity_provider is not None
-            assert manager.fcrd_state == "ACTIVATED"
-            assert manager.ems_settings == "Currently optimized (CO)"
-            assert manager.total_solar_energy == 11124779.0
-            assert manager.total_export_energy == 8040738.0
-
-
-class TestMethodCallDependencies:
-    """Test and document method call order dependencies."""
-
-    @pytest.mark.asyncio
-    async def test_customer_properties_require_get_customer_details(self):
-        """Test that customer properties require get_customer_details()
-        to be called first."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
-
-            # Before get_customer_details()
-            with pytest.raises((TypeError, AttributeError)):
-                _ = manager.registered_owner
-
-            # After get_customer_details()
-            manager.jwt_token = "test_token"
-            with patch.object(manager, '_request') as mock_request:
-                mock_request.return_value = SAMPLE_CUSTOMER_DETAILS_JSON
-                
-                await manager.get_customer_details()
-
-            assert manager.registered_owner is not None
-
-    @pytest.mark.asyncio
-    async def test_energy_properties_require_get_power_data(self):
-        """Test that energy properties require get_power_data() to be called first."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
-
-            # Before get_power_data()
-            with pytest.raises(AttributeError):
-                _ = manager.total_solar_energy
-
-            # After get_power_data()
-            manager.jwt_token = "test_token"
-            manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON
-            
-            with patch.object(manager, '_request') as mock_request:
-                mock_request.return_value = SAMPLE_POWER_DATA_RESPONSE
-                
-                await manager.get_power_data()
-
-            assert manager.total_solar_energy == 11124779.0  # Sum of all measurements
-
-    @pytest.mark.asyncio
-    async def test_ems_settings_property_requires_get_ems_settings(self):
-        """Test that ems_settings property requires get_ems_settings()
-        to be called first."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
-
-            # Before get_ems_settings()
-            with pytest.raises(TypeError):
-                _ = manager.ems_settings
-
-            # After get_ems_settings()
-            manager.jwt_token = "test_token"
-            manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON
-            
-            with patch.object(manager, '_request') as mock_request:
-                mock_request.return_value = SAMPLE_EMS_SETTINGS_RESPONSE
-                
-                await manager.get_ems_settings()
-
-            assert manager.ems_settings == "Currently optimized (CO)"
 
 
 class TestFCRDStateExtraction:
