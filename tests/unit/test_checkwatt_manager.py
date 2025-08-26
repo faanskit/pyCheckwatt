@@ -216,10 +216,10 @@ class TestPropertyAccess:
 
         # FCR-D state properties should be populated from logbook
         assert manager.fcrd_state == "ACTIVATED"
-        assert manager.fcrd_power == "7"
-        assert manager.fcrd_timestamp == "2024-07-07 00:08:19"
-        assert manager.fcrd_percentage_up == "97,7"
-        assert manager.fcrd_percentage_down == "99,3"
+        assert manager.fcrd_power == "10,0/10,0"
+        assert manager.fcrd_timestamp == "2025-01-01 00:04:45"
+        assert manager.fcrd_percentage_up == "96,5"
+        assert manager.fcrd_percentage_down == "106,3"
 
     def test_properties_fail_without_data(self):
         """Test that properties fail appropriately when data isn't loaded."""
