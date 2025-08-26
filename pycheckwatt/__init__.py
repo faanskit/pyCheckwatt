@@ -22,16 +22,31 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
+import os
 import random
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Optional, Union
 
 from aiohttp import ClientError, ClientResponseError, ClientSession
 from dateutil.relativedelta import relativedelta
+
+# Import aiofiles for async file operations
+try:
+    import aiofiles
+except ImportError:
+    aiofiles = None
+
+# Import cryptography for session encryption
+try:
+    from cryptography.fernet import Fernet
+    CRYPTOGRAPHY_AVAILABLE = True
+except ImportError:
+    CRYPTOGRAPHY_AVAILABLE = False
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,7 +65,9 @@ class CheckwattManager:
         backoff_factor: float = 2.0,
         backoff_max: float = 30.0,
         clock_skew_seconds: int = 10,
-        max_concurrent_requests: int = 5
+        max_concurrent_requests: int = 5,
+        persist_sessions: bool = True,
+        session_file: str = None
     ) -> None:
         """Initialize the CheckWatt manager."""
         if username is None or password is None:
@@ -67,6 +84,40 @@ class CheckwattManager:
         self.jwt_token = None
         self.refresh_token = None
         self.refresh_token_expires = None
+        
+        self._auth_state = {
+            'jwt_token': None,
+            'refresh_token': None,
+            'jwt_expires_at': None,
+            'refresh_expires_at': None,
+            'last_auth_time': None,
+            'auth_method': None
+        }
+
+        # Set default session file if none provided and persistence is enabled
+        if session_file is None and persist_sessions and aiofiles is not None:
+            # Create a default path in user's home directory or temp directory
+            import tempfile
+            import os
+            try:
+                # Try to use user's home directory first
+                home_dir = os.path.expanduser("~")
+                if os.access(home_dir, os.W_OK):
+                    session_file = os.path.join(home_dir, ".pycheckwatt_sessions", f"{username}_session.json")
+                else:
+                    # Fall back to temp directory
+                    temp_dir = tempfile.gettempdir()
+                    session_file = os.path.join(temp_dir, f"pycheckwatt_{username}_session.json")
+            except Exception:
+                # If all else fails, use temp directory
+                temp_dir = tempfile.gettempdir()
+                session_file = os.path.join(temp_dir, f"pycheckwatt_{username}_session.json")
+        
+        self._session_config = {
+            'persist_sessions': persist_sessions and aiofiles is not None,
+            'session_file': session_file,
+            'encrypt_sessions': CRYPTOGRAPHY_AVAILABLE
+        }
         
         # Concurrency control
         self._auth_lock = asyncio.Lock()
@@ -118,14 +169,35 @@ class CheckwattManager:
     async def __aenter__(self):
         """Asynchronous enter."""
         self.session = ClientSession()
+        
+        # Try to load existing session if session persistence is enabled
+        if self._session_config['persist_sessions'] and self._session_config['session_file']:
+            try:
+                await self._load_session()
+                _LOGGER.debug("Session loaded on context enter")
+            except Exception as e:
+                _LOGGER.debug("Failed to load session on context enter: %s", e)
+        
         return self
 
     async def __aexit__(self, exc_type, exc_value, traceback):
         """Asynchronous exit."""
         await self.session.close()
 
+    async def ensure_session(self):
+        """Ensure session is initialized. Call this if not using async context manager."""
+        if self.session is None:
+            self.session = ClientSession()
+            _LOGGER.debug("Session initialized manually")
+        return self.session
+
     def _get_headers(self):
         """Define common headers."""
+        
+        # Ensure header_identifier is not None
+        if self.header_identifier is None:
+            self.header_identifier = "pyCheckwatt"
+            _LOGGER.warning("header_identifier was None, defaulting to 'pyCheckwatt'")
 
         return {
             "accept": "application/json, text/plain, */*",
@@ -162,12 +234,53 @@ class CheckwattManager:
                 return False
             
             # Check if token expires within clock skew
-            now = datetime.utcnow().timestamp()
+            now = datetime.now(timezone.utc).timestamp()
             return now < (exp - self.clock_skew_seconds)
             
         except (ValueError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
             # If we can't decode, treat as unknown validity
             return False
+
+    def _is_jwt_valid(self) -> bool:
+        """Check if JWT is valid with buffer (enhanced version)."""
+        if not self._auth_state['jwt_token'] or not self._auth_state['jwt_expires_at']:
+            _LOGGER.debug("JWT validation failed: missing token or expiry time")
+            return False
+        
+        buffer = timedelta(seconds=self.clock_skew_seconds)
+        now = datetime.now(timezone.utc)
+        expires_at = self._ensure_utc_datetime(self._auth_state['jwt_expires_at'])
+        is_valid = now < (expires_at - buffer)
+        
+        if is_valid:
+            time_until_expiry = expires_at - now
+            _LOGGER.debug("JWT is valid, expires in %s (buffer: %ds)", 
+                         time_until_expiry, self.clock_skew_seconds)
+        else:
+            _LOGGER.debug("JWT is expired or will expire within buffer (%ds)", 
+                         self.clock_skew_seconds)
+        
+        return is_valid
+    
+    def _is_refresh_valid(self) -> bool:
+        """Check if refresh token is valid with buffer."""
+        if not self._auth_state['refresh_token'] or not self._auth_state['refresh_expires_at']:
+            _LOGGER.debug("Refresh token validation failed: missing token or expiry time")
+            return False
+        
+        buffer = timedelta(seconds=300)  # 5-minute buffer
+        now = datetime.now(timezone.utc)
+        expires_at = self._ensure_utc_datetime(self._auth_state['refresh_expires_at'])
+        is_valid = now < (expires_at - buffer)
+        
+        if is_valid:
+            time_until_expiry = expires_at - now
+            _LOGGER.debug("Refresh token is valid, expires in %s (buffer: 300s)", 
+                         time_until_expiry)
+        else:
+            _LOGGER.debug("Refresh token is expired or will expire within buffer (300s)")
+        
+        return is_valid
 
     def _refresh_is_valid(self) -> bool:
         """Check if refresh token is valid and not expired."""
@@ -177,7 +290,10 @@ class CheckwattManager:
         try:
             # Parse the expiration timestamp
             expires = datetime.fromisoformat(self.refresh_token_expires.replace('Z', '+00:00'))
-            now = datetime.now(expires.tzinfo) if expires.tzinfo else datetime.utcnow()
+            # Ensure it's UTC if no timezone info
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
             
             # Add some buffer (5 minutes) to avoid edge cases
             return now < (expires - timedelta(minutes=5))
@@ -213,6 +329,23 @@ class CheckwattManager:
                     if "RefreshTokenExpires" in data:
                         self.refresh_token_expires = data.get("RefreshTokenExpires")
                     
+                    # Update internal auth state - ensure all timestamps are UTC-aware
+                    jwt_expiry = self._ensure_utc_datetime(self.jwt_expires_at)
+                    refresh_expiry = self._ensure_utc_datetime(self.refresh_expires_at)
+                    
+                    self._auth_state.update({
+                        'jwt_token': self.jwt_token,
+                        'refresh_token': self.refresh_token,
+                        'jwt_expires_at': jwt_expiry,
+                        'refresh_expires_at': refresh_expiry,
+                        'last_auth_time': datetime.now(timezone.utc),
+                        'auth_method': 'refresh'
+                    })
+                    
+                    # Persist session if enabled
+                    if self._session_config['persist_sessions']:
+                        await self._save_session()
+                    
                     _LOGGER.info("Successfully refreshed JWT token")
                     return True
                 
@@ -227,6 +360,314 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             _LOGGER.error("Error during token refresh: %s", error)
             return False
+
+    async def ensure_authenticated(self) -> bool:
+        """Ensure valid authentication, automatically refresh if needed."""
+        try:
+            # Quick check for valid JWT
+            if self._is_jwt_valid():
+                _LOGGER.debug("JWT is valid, authentication successful")
+                return True
+            
+            _LOGGER.debug("JWT is invalid or expired, checking refresh token")
+            
+            # Try refresh if available
+            if self._is_refresh_valid():
+                _LOGGER.debug("Refresh token is valid, attempting token refresh")
+                if await self._refresh_tokens():
+                    _LOGGER.debug("Token refresh successful")
+                    return True
+                else:
+                    _LOGGER.debug("Token refresh failed, falling back to login")
+            else:
+                _LOGGER.debug("Refresh token is invalid or expired")
+            
+            # Fall back to password login
+            _LOGGER.debug("Attempting password-based login")
+            return await self._perform_login()
+            
+        except Exception as e:
+            _LOGGER.error("Authentication failed: %s", e)
+            return False
+
+    async def _perform_login(self) -> bool:
+        """Perform password-based login and update internal state."""
+        try:
+            # Use existing login logic
+            result = await self.login()
+            
+            if result:
+                # Update internal auth state - ensure all timestamps are UTC-aware
+                jwt_expiry = self._ensure_utc_datetime(self.jwt_expires_at)
+                refresh_expiry = self._ensure_utc_datetime(self.refresh_expires_at)
+                
+                self._auth_state.update({
+                    'jwt_token': self.jwt_token,
+                    'refresh_token': self.refresh_token,
+                    'jwt_expires_at': jwt_expiry,
+                    'refresh_expires_at': refresh_expiry,
+                    'last_auth_time': datetime.now(timezone.utc),
+                    'auth_method': 'password'
+                })
+                
+                # Persist session if enabled
+                if self._session_config['persist_sessions']:
+                    await self._save_session()
+                
+                return True
+                
+            return False
+            
+        except Exception as e:
+            _LOGGER.error("Login failed: %s", e)
+            return False
+
+    async def _refresh_tokens(self) -> bool:
+        """Refresh JWT tokens using refresh token."""
+        try:
+            # Use existing refresh logic
+            result = await self._refresh()
+            
+            if result:
+                # Update internal auth state - ensure all timestamps are UTC-aware
+                jwt_expiry = self._ensure_utc_datetime(self.jwt_expires_at)
+                refresh_expiry = self._ensure_utc_datetime(self.refresh_expires_at)
+                
+                self._auth_state.update({
+                    'jwt_token': self.jwt_token,
+                    'refresh_token': self.refresh_token,
+                    'jwt_expires_at': jwt_expiry,
+                    'refresh_expires_at': refresh_expiry,
+                    'last_auth_time': datetime.now(timezone.utc),
+                    'auth_method': 'refresh'
+                })
+                
+                # Persist session if enabled
+                if self._session_config['persist_sessions']:
+                    await self._save_session()
+                
+                return True
+                
+            return False
+            
+        except Exception as e:
+            _LOGGER.error("Token refresh failed: %s", e)
+            return False
+
+    async def _save_session(self) -> bool:
+        """Save current session to file with encryption."""
+        if not self._session_config['session_file'] or not aiofiles:
+            _LOGGER.debug("Session saving skipped: no file path or aiofiles unavailable")
+            return False
+        
+        try:
+            _LOGGER.debug("Saving session to %s (encrypted: %s)", 
+                         self._session_config['session_file'],
+                         self._session_config['encrypt_sessions'])
+            
+            session_data = {
+                'version': '1.0',
+                'username': self.username,
+                'auth_state': self._auth_state,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            }
+            
+            if self._session_config['encrypt_sessions']:
+                encrypted_data = self._encrypt_session_data(session_data)
+            else:
+                encrypted_data = json.dumps(session_data, default=str)
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(self._session_config['session_file']), exist_ok=True)
+            
+            # Write session file
+            async with aiofiles.open(self._session_config['session_file'], 'w') as f:
+                await f.write(encrypted_data)
+            
+            _LOGGER.debug("Session saved to %s", self._session_config['session_file'])
+            return True
+            
+        except Exception as e:
+            _LOGGER.error("Failed to save session: %s", e)
+            return False
+    
+    async def _load_session(self) -> bool:
+        """Load session from file and validate."""
+        if not self._session_config['session_file'] or not aiofiles:
+            _LOGGER.debug("Session loading skipped: no file path or aiofiles unavailable")
+            return False
+        
+        try:
+            if not os.path.exists(self._session_config['session_file']):
+                _LOGGER.debug("Session file does not exist: %s", self._session_config['session_file'])
+                return False
+            
+            _LOGGER.debug("Loading session from %s (encrypted: %s)", 
+                         self._session_config['session_file'],
+                         self._session_config['encrypt_sessions'])
+            
+            # Read session file
+            async with aiofiles.open(self._session_config['session_file'], 'r') as f:
+                encrypted_data = await f.read()
+            
+            # Decrypt if needed
+            if self._session_config['encrypt_sessions']:
+                session_data = self._decrypt_session_data(encrypted_data)
+            else:
+                session_data = json.loads(encrypted_data)
+            
+            # Validate session data
+            if not self._validate_session_data(session_data):
+                _LOGGER.warning("Invalid session data, clearing")
+                await self._clear_session()
+                return False
+            
+            # Restore auth state and ensure all timestamps are UTC-aware
+            self._auth_state = session_data['auth_state']
+            
+            # Ensure stored timestamps are UTC-aware
+            if self._auth_state['jwt_expires_at']:
+                self._auth_state['jwt_expires_at'] = self._ensure_utc_datetime(self._auth_state['jwt_expires_at'])
+            if self._auth_state['refresh_expires_at']:
+                self._auth_state['refresh_expires_at'] = self._ensure_utc_datetime(self._auth_state['refresh_expires_at'])
+            if self._auth_state['last_auth_time']:
+                self._auth_state['last_auth_time'] = self._ensure_utc_datetime(self._auth_state['last_auth_time'])
+            
+            self.jwt_token = self._auth_state['jwt_token']
+            self.refresh_token = self._auth_state['refresh_token']
+            self.refresh_token_expires = self._auth_state['refresh_expires_at']
+            
+            _LOGGER.debug("Session restored from %s", self._session_config['session_file'])
+            return True
+            
+        except Exception as e:
+            _LOGGER.error("Failed to load session: %s", e)
+            return False
+    
+    async def _clear_session(self) -> None:
+        """Clear current session and remove session file."""
+        self._auth_state = {
+            'jwt_token': None,
+            'refresh_token': None,
+            'jwt_expires_at': None,
+            'refresh_expires_at': None,
+            'last_auth_time': None,
+            'auth_method': None
+        }
+        
+        if self._session_config['session_file'] and os.path.exists(self._session_config['session_file']):
+            try:
+                os.remove(self._session_config['session_file'])
+                _LOGGER.debug("Session file removed")
+            except Exception as e:
+                _LOGGER.error("Failed to remove session file: %s", e)
+
+    def _ensure_utc_datetime(self, dt: Optional[Union[datetime, str]]) -> Optional[datetime]:
+        """Ensure datetime is UTC-aware, converting if necessary."""
+        if dt is None:
+            return None
+        
+        # Handle string timestamps (from session files)
+        if isinstance(dt, str):
+            try:
+                dt = datetime.fromisoformat(dt.replace('Z', '+00:00'))
+            except (ValueError, TypeError):
+                _LOGGER.warning("Failed to parse timestamp string: %s", dt)
+                return None
+        
+        if dt.tzinfo is None:
+            # If naive, assume UTC and make it aware
+            return dt.replace(tzinfo=timezone.utc)
+        elif dt.tzinfo != timezone.utc:
+            # If different timezone, convert to UTC
+            return dt.astimezone(timezone.utc)
+        else:
+            # Already UTC-aware
+            return dt
+
+    def _get_encryption_key(self) -> bytes:
+        """Generate encryption key from username and password."""
+        # Create a deterministic key from credentials
+        key_material = f"{self.username}:{self.password}".encode('utf-8')
+        key_hash = hashlib.sha256(key_material).digest()
+        return base64.urlsafe_b64encode(key_hash)
+    
+    def _encrypt_session_data(self, data: dict) -> str:
+        """Encrypt session data."""
+        if not CRYPTOGRAPHY_AVAILABLE:
+            raise RuntimeError("Cryptography library not available for encryption")
+        
+        key = self._get_encryption_key()
+        f = Fernet(key)
+        json_data = json.dumps(data, default=str)
+        encrypted = f.encrypt(json_data.encode('utf-8'))
+        return encrypted.decode('utf-8')
+    
+    def _decrypt_session_data(self, encrypted_data: str) -> dict:
+        """Decrypt session data."""
+        if not CRYPTOGRAPHY_AVAILABLE:
+            raise RuntimeError("Cryptography library not available for decryption")
+        
+        key = self._get_encryption_key()
+        f = Fernet(key)
+        decrypted = f.decrypt(encrypted_data.encode('utf-8'))
+        return json.loads(decrypted.decode('utf-8'))
+    
+    def _validate_session_data(self, data: dict) -> bool:
+        """Validate loaded session data."""
+        required_fields = ['version', 'username', 'auth_state', 'timestamp']
+        if not all(field in data for field in required_fields):
+            return False
+        
+        if data['username'] != self.username:
+            return False
+        
+        if data['version'] != '1.0':
+            return False
+        
+        return True
+
+    async def load_session(self, filepath: str = None) -> bool:
+        """Load session from file."""
+        if filepath:
+            self._session_config['session_file'] = filepath
+        
+        return await self._load_session()
+    
+    async def save_session(self, filepath: str = None) -> bool:
+        """Save current session to file."""
+        if filepath:
+            self._session_config['session_file'] = filepath
+        
+        return await self._save_session()
+    
+    async def clear_session(self) -> None:
+        """Clear current session."""
+        await self._clear_session()
+    
+    def get_session_info(self) -> dict:
+        """Get current session information."""
+        return {
+            'authenticated': self._is_jwt_valid(),
+            'jwt_expires_in': self._get_jwt_expiry_delta(),
+            'refresh_expires_in': self._get_refresh_expiry_delta(),
+            'last_auth_method': self._auth_state['auth_method'],
+            'last_auth_time': self._auth_state['last_auth_time']
+        }
+    
+    def _get_jwt_expiry_delta(self) -> Optional[timedelta]:
+        """Get time until JWT expires."""
+        if not self._auth_state['jwt_expires_at']:
+            return None
+        expires_at = self._ensure_utc_datetime(self._auth_state['jwt_expires_at'])
+        return expires_at - datetime.now(timezone.utc)
+    
+    def _get_refresh_expiry_delta(self) -> Optional[timedelta]:
+        """Get time until refresh token expires."""
+        if not self._auth_state['refresh_expires_at']:
+            return None
+        expires_at = self._ensure_utc_datetime(self._auth_state['refresh_expires_at'])
+        return expires_at - datetime.now(timezone.utc)
 
     async def _ensure_token(self) -> bool:
         """Ensure we have a valid JWT token, refreshing or logging in if needed."""
@@ -485,6 +926,24 @@ class CheckwattManager:
                     self.jwt_token = data.get("JwtToken")
                     self.refresh_token = data.get("RefreshToken")
                     self.refresh_token_expires = data.get("RefreshTokenExpires")
+                    
+                    # Update internal auth state - ensure all timestamps are UTC-aware
+                    jwt_expiry = self._ensure_utc_datetime(self.jwt_expires_at)
+                    refresh_expiry = self._ensure_utc_datetime(self.refresh_expires_at)
+                    
+                    self._auth_state.update({
+                        'jwt_token': self.jwt_token,
+                        'refresh_token': self.refresh_token,
+                        'jwt_expires_at': jwt_expiry,
+                        'refresh_expires_at': refresh_expiry,
+                        'last_auth_time': datetime.now(timezone.utc),
+                        'auth_method': 'password'
+                    })
+                    
+                    # Persist session if enabled
+                    if self._session_config['persist_sessions']:
+                        await self._save_session()
+                    
                     _LOGGER.info("Successfully logged in to CheckWatt")
                     return True
 
@@ -503,6 +962,10 @@ class CheckwattManager:
     async def get_customer_details(self):
         """Fetch customer details from CheckWatt."""
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for customer details")
+                return False
+            
             endpoint = "/controlpanel/CustomerDetail"
             
             result = await self._request("GET", endpoint, auth_required=True)
@@ -583,6 +1046,10 @@ class CheckwattManager:
             )
 
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for site ID")
+                return False
+            
             endpoint = f"/Site/SiteIdBySerial?serial={self.rpi_serial}"
             
             result = await self._request("GET", endpoint, auth_required=True)
@@ -631,6 +1098,10 @@ class CheckwattManager:
         """Fetch FCR-D revenues from CheckWatt."""
         misseddays = 0
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for FCR-D month revenue")
+                return False
+            
             site_id = await self.get_site_id()
             if site_id is False:
                 _LOGGER.error("Failed to get site ID for FCR-D month revenue")
@@ -669,6 +1140,8 @@ class CheckwattManager:
                 return False
             
             revenue = result
+            # Reset monthly revenue before adding new values
+            self.revenuemonth = 0
             for each in revenue["Revenue"]:
                 self.revenuemonth += each["NetRevenue"]
                 if each["NetRevenue"] == 0:
@@ -692,6 +1165,10 @@ class CheckwattManager:
     async def get_fcrd_today_net_revenue(self):
         """Fetch FCR-D revenues from CheckWatt."""
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for FCR-D today revenue")
+                return False
+            
             site_id = await self.get_site_id()
             if site_id is False:
                 _LOGGER.error("Failed to get site ID for FCR-D today revenue")
@@ -727,55 +1204,36 @@ class CheckwattManager:
 
     async def get_fcrd_year_net_revenue(self):
         """Fetch FCR-D revenues from CheckWatt."""
-        site_id = await self.get_site_id()
-        if site_id is False:
-            _LOGGER.error("Failed to get site ID for FCR-D year revenue")
-            return False
-        
-        if not site_id:
-            _LOGGER.error("Site ID is empty or None for FCR-D year revenue")
-            return False
-            
-        _LOGGER.debug("Using site ID %s for FCR-D year revenue", site_id)
-        
-        yesterday_date = datetime.now() + timedelta(days=1)
-        yesterday_date = yesterday_date.strftime("-%m-%d")
-        months = ["-01-01", "-06-30", "-07-01", yesterday_date]
-        loop = 0
-        retval = False
-        if yesterday_date <= "-07-01":
-            try:
-                year_date = datetime.now().strftime("%Y")
-                to_date = year_date + yesterday_date
-                from_date = year_date + "-01-01"
-                endpoint = (
-                    f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
-                )
-                _LOGGER.debug("FCR-D year revenue endpoint (first half): %s", endpoint)
-                
-                result = await self._request("GET", endpoint, auth_required=True)
-                if result is False:
-                    _LOGGER.error("Failed to retrieve FCR-D year revenue from endpoint: %s", endpoint)
-                    return False
-                
-                self.revenueyear = result
-                for each in self.revenueyear["Revenue"]:
-                    self.revenueyeartotal += each["NetRevenue"]
-                retval = True
-                _LOGGER.info("Successfully retrieved FCR-D year revenue (first half)")
-                return retval
-
-            except Exception as error:
-                _LOGGER.error("Error in get_fcrd_year_net_revenue (first half): %s", error)
+        try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for FCR-D year revenue")
                 return False
-        else:
-            try:
-                while loop < 3:
+            
+            site_id = await self.get_site_id()
+            if site_id is False:
+                _LOGGER.error("Failed to get site ID for FCR-D year revenue")
+                return False
+            
+            if not site_id:
+                _LOGGER.error("Site ID is empty or None for FCR-D year revenue")
+                return False
+                
+            _LOGGER.debug("Using site ID %s for FCR-D year revenue", site_id)
+            
+            yesterday_date = datetime.now() + timedelta(days=1)
+            yesterday_date = yesterday_date.strftime("-%m-%d")
+            months = ["-01-01", "-06-30", "-07-01", yesterday_date]
+            loop = 0
+            retval = False
+            if yesterday_date <= "-07-01":
+                try:
                     year_date = datetime.now().strftime("%Y")
-                    to_date = year_date + months[loop + 1]
-                    from_date = year_date + months[loop]
-                    endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
-                    _LOGGER.debug("FCR-D year revenue endpoint (period %d): %s", loop, endpoint)
+                    to_date = year_date + yesterday_date
+                    from_date = year_date + "-01-01"
+                    endpoint = (
+                        f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+                    )
+                    _LOGGER.debug("FCR-D year revenue endpoint (first half): %s", endpoint)
                     
                     result = await self._request("GET", endpoint, auth_required=True)
                     if result is False:
@@ -783,21 +1241,59 @@ class CheckwattManager:
                         return False
                     
                     self.revenueyear = result
+                    # Reset yearly revenue before adding new values
+                    self.revenueyeartotal = 0
                     for each in self.revenueyear["Revenue"]:
                         self.revenueyeartotal += each["NetRevenue"]
-                    loop += 2
                     retval = True
-                    
-                _LOGGER.info("Successfully retrieved FCR-D year revenue (multiple periods)")
-                return retval
+                    _LOGGER.info("Successfully retrieved FCR-D year revenue (first half)")
+                    return retval
 
-            except Exception as error:
-                _LOGGER.error("Error in get_fcrd_year_net_revenue (multiple periods): %s", error)
-                return False
+                except Exception as error:
+                    _LOGGER.error("Error in get_fcrd_year_net_revenue (first half): %s", error)
+                    return False
+            else:
+                try:
+                    # Reset yearly revenue once before processing all periods
+                    self.revenueyeartotal = 0
+                    
+                    while loop < 3:
+                        year_date = datetime.now().strftime("%Y")
+                        to_date = year_date + months[loop + 1]
+                        from_date = year_date + months[loop]
+                        endpoint = f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
+                        _LOGGER.debug("FCR-D year revenue endpoint (period %d): %s", loop, endpoint)
+                        
+                        result = await self._request("GET", endpoint, auth_required=True)
+                        if result is False:
+                            _LOGGER.error("Failed to retrieve FCR-D year revenue from endpoint: %s", endpoint)
+                            return False
+                        
+                        self.revenueyear = result
+                        # Add this period's revenue to the total (don't reset)
+                        for each in self.revenueyear["Revenue"]:
+                            self.revenueyeartotal += each["NetRevenue"]
+                        loop += 2
+                        retval = True
+                        
+                    _LOGGER.info("Successfully retrieved FCR-D year revenue (multiple periods)")
+                    return retval
+
+                except Exception as error:
+                    _LOGGER.error("Error in get_fcrd_year_net_revenue (multiple periods): %s", error)
+                    return False
+                    
+        except Exception as error:
+            _LOGGER.error("Error in get_fcrd_year_net_revenue: %s", error)
+            return False
 
     async def fetch_and_return_net_revenue(self, from_date, to_date):
         """Fetch FCR-D revenues from CheckWatt as per provided range."""
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for custom revenue range")
+                return None
+            
             site_id = await self.get_site_id()
             if site_id is False:
                 _LOGGER.error("Failed to get site ID for custom revenue range")
@@ -1006,6 +1502,10 @@ class CheckwattManager:
         """Fetch Power Data from CheckWatt."""
 
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for power data")
+                return False
+            
             endpoint = self._build_series_endpoint(
                 3
             )  # 0: Hourly, 1: Daily, 2: Monthly, 3: Yearly
@@ -1025,6 +1525,10 @@ class CheckwattManager:
         """Fetch Power Data from CheckWatt."""
 
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for energy flow")
+                return False
+            
             endpoint = "/ems/energyflow"
 
             result = await self._request("GET", endpoint, auth_required=True)
@@ -1042,6 +1546,10 @@ class CheckwattManager:
         """Fetch EMS settings from CheckWatt."""
 
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for EMS settings")
+                return False
+            
             if rpi_serial is None:
                 rpi_serial = self.rpi_serial
 
@@ -1058,10 +1566,34 @@ class CheckwattManager:
             _LOGGER.error("Error in get_ems_settings: %s", error)
             return False
 
+    async def get_energy_trading_company(self, input_id):
+        """Translate Energy Company Id to Energy Company Name."""
+        try:
+            endpoint = "/controlpanel/elhandelsbolag"
+
+            result = await self._request("GET", endpoint, auth_required=False)
+            if result is False:
+                return None
+            
+            energy_trading_companies = result
+            for energy_trading_company in energy_trading_companies:
+                if energy_trading_company["Id"] == input_id:
+                    return energy_trading_company["DisplayName"]
+
+            return None
+
+        except Exception as error:
+            _LOGGER.error("Error in get_energy_trading_company: %s", error)
+            return None
+
     async def get_price_zone(self):
         """Fetch Price Zone from CheckWatt."""
 
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for price zone")
+                return False
+            
             endpoint = "/ems/pricezone"
             
             result = await self._request("GET", endpoint, auth_required=True)
@@ -1079,6 +1611,10 @@ class CheckwattManager:
         """Fetch Spot Price from CheckWatt."""
 
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for spot price")
+                return False
+            
             from_date = datetime.now().strftime("%Y-%m-%d")
             end_date = datetime.now() + timedelta(days=1)
             to_date = end_date.strftime("%Y-%m-%d")
@@ -1102,6 +1638,10 @@ class CheckwattManager:
         month = datetime.now().strftime("%Y-%m")
 
         try:
+            if not await self.ensure_authenticated():
+                _LOGGER.error("Failed to authenticate for battery month peak effect")
+                return False
+            
             endpoint = f"/ems/PeakBoughtMonth?month={month}"
             
             result = await self._request("GET", endpoint, auth_required=True)
@@ -1536,7 +2076,7 @@ class CheckwattManager:
             if not exp:
                 return None
             
-            return datetime.fromtimestamp(exp)
+            return datetime.fromtimestamp(exp, tz=timezone.utc)
             
         except (ValueError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
             return None
@@ -1548,9 +2088,13 @@ class CheckwattManager:
             return None
         
         try:
-            return datetime.fromisoformat(
+            dt = datetime.fromisoformat(
                 self.refresh_token_expires.replace('Z', '+00:00')
             )
+            # Ensure it's UTC if no timezone info
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except (ValueError, TypeError):
             return None
 

@@ -108,6 +108,7 @@ class TestAuthentication:
         """Test token refresh failure handling."""
         async with CheckwattManager("test_user", "test_pass") as manager:
             manager.refresh_token = "test_refresh_token"
+            initial_jwt = manager.jwt_token  # Capture initial value
             
             with patch('aiohttp.ClientSession.get') as mock_get:
                 mock_response = AsyncMock()
@@ -477,7 +478,7 @@ class TestConfiguration:
         assert manager.backoff_base == 0.5
         assert manager.backoff_factor == 2.0
         assert manager.backoff_max == 30.0
-        assert manager.clock_skew_seconds == 60
+        assert manager.clock_skew_seconds == 10
         assert manager.max_concurrent_requests == 5
     
     def test_custom_configuration(self):
