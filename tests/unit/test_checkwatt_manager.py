@@ -535,3 +535,66 @@ class TestMethodCallDependencies:
                 await manager.get_ems_settings()
 
             assert manager.ems_settings == "Currently optimized (CO)"
+
+
+class TestFCRDStateExtraction:
+    """Test FCR-D state extraction from logbook entries."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.manager = CheckwattManager("test_user", "test_pass")
+
+    def test_fail_activation_with_retry_count_and_complex_power(self):
+        """Test parsing of FAIL ACTIVATION entries with retry count and complex power format."""
+        log_entry = "[ FCR-D FAIL ACTIVATION ] 54x test@example.com --12345-- 85,9/0,6/97,0 % (10,0/10,0 kW) 2025-04-24 00:02:57 API-BACKEND"
+        
+        self.manager.logbook_entries = [log_entry]
+        self.manager._extract_fcr_d_state()
+        
+        assert self.manager.fcrd_state == "FAIL ACTIVATION"
+        assert self.manager.fcrd_percentage_up == "85,9"
+        assert self.manager.fcrd_percentage_response == "0,6"
+        assert self.manager.fcrd_percentage_down == "97,0"
+        assert self.manager.fcrd_power == "10,0/10,0"
+        assert self.manager.fcrd_timestamp == "2025-04-24 00:02:57"
+
+    def test_activated_with_complex_power_format(self):
+        """Test parsing of ACTIVATED entries with complex power format."""
+        log_entry = "[ FCR-D ACTIVATED ] test@example.com --12345-- 96,5/4,0/106,3 % (10,0/10,0 kW) 2025-08-07 00:04:45 API-BACKEND"
+        
+        self.manager.logbook_entries = [log_entry]
+        self.manager._extract_fcr_d_state()
+        
+        assert self.manager.fcrd_state == "ACTIVATED"
+        assert self.manager.fcrd_percentage_up == "96,5"
+        assert self.manager.fcrd_percentage_response == "4,0"
+        assert self.manager.fcrd_percentage_down == "106,3"
+        assert self.manager.fcrd_power == "10,0/10,0"
+        assert self.manager.fcrd_timestamp == "2025-08-07 00:04:45"
+
+    def test_deactivate_with_frequency_up_hz(self):
+        """Test parsing of DEACTIVATE entries with UP frequency."""
+        log_entry = "[ FCR-D DEACTIVATE ]  UP 49,83 Hz 0,0 %  (10 kW) - 2025-08-06 17:58:07 API-BACKEND"
+        
+        self.manager.logbook_entries = [log_entry]
+        self.manager._extract_fcr_d_state()
+        
+        assert self.manager.fcrd_state == "DEACTIVATE"
+        # For DEACTIVATE, the percentage info goes to fcrd_info
+        assert self.manager.fcrd_power == "10"
+        assert self.manager.fcrd_timestamp == "2025-08-06 17:58:07"
+
+    def test_multiple_entries_first_match_used(self):
+        """Test that only the first matching entry is processed."""
+        log_entries = [
+            "[ FCR-D ACTIVATED ] test@example.com --12345-- 97,7/0,5/99,3 % (7 kW) 2024-07-07 00:08:19 API-BACKEND",
+            "[ FCR-D FAIL ACTIVATION ] 54x test@example.com --12345-- 85,9/0,6/97,0 % (10,0/10,0 kW) 2025-04-24 00:02:57 API-BACKEND",
+        ]
+        
+        self.manager.logbook_entries = log_entries
+        self.manager._extract_fcr_d_state()
+        
+        # Should use the first entry (ACTIVATED)
+        assert self.manager.fcrd_state == "ACTIVATED"
+        assert self.manager.fcrd_power == "7"
+        assert self.manager.fcrd_timestamp == "2024-07-07 00:08:19"
