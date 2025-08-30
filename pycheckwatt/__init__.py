@@ -174,7 +174,6 @@ class CheckwattManager:
         if self._session_config['persist_sessions'] and self._session_config['session_file']:
             try:
                 await self._load_session()
-                _LOGGER.debug("Session loaded on context enter")
             except Exception as e:
                 _LOGGER.debug("Failed to load session on context enter: %s", e)
         
@@ -188,7 +187,6 @@ class CheckwattManager:
         """Ensure session is initialized. Call this if not using async context manager."""
         if self.session is None:
             self.session = ClientSession()
-            _LOGGER.debug("Session initialized manually")
         return self.session
 
     def _get_headers(self):
@@ -244,7 +242,6 @@ class CheckwattManager:
     def _is_jwt_valid(self) -> bool:
         """Check if JWT is valid with buffer (enhanced version)."""
         if not self._auth_state['jwt_token'] or not self._auth_state['jwt_expires_at']:
-            _LOGGER.debug("JWT validation failed: missing token or expiry time")
             return False
         
         buffer = timedelta(seconds=self.clock_skew_seconds)
@@ -252,33 +249,17 @@ class CheckwattManager:
         expires_at = self._ensure_utc_datetime(self._auth_state['jwt_expires_at'])
         is_valid = now < (expires_at - buffer)
         
-        if is_valid:
-            time_until_expiry = expires_at - now
-            _LOGGER.debug("JWT is valid, expires in %s (buffer: %ds)", 
-                         time_until_expiry, self.clock_skew_seconds)
-        else:
-            _LOGGER.debug("JWT is expired or will expire within buffer (%ds)", 
-                         self.clock_skew_seconds)
-        
         return is_valid
     
     def _is_refresh_valid(self) -> bool:
         """Check if refresh token is valid with buffer."""
         if not self._auth_state['refresh_token'] or not self._auth_state['refresh_expires_at']:
-            _LOGGER.debug("Refresh token validation failed: missing token or expiry time")
             return False
         
         buffer = timedelta(seconds=300)  # 5-minute buffer
         now = datetime.now(timezone.utc)
         expires_at = self._ensure_utc_datetime(self._auth_state['refresh_expires_at'])
         is_valid = now < (expires_at - buffer)
-        
-        if is_valid:
-            time_until_expiry = expires_at - now
-            _LOGGER.debug("Refresh token is valid, expires in %s (buffer: 300s)", 
-                         time_until_expiry)
-        else:
-            _LOGGER.debug("Refresh token is expired or will expire within buffer (300s)")
         
         return is_valid
 
@@ -366,24 +347,14 @@ class CheckwattManager:
         try:
             # Quick check for valid JWT
             if self._is_jwt_valid():
-                _LOGGER.debug("JWT is valid, authentication successful")
                 return True
-            
-            _LOGGER.debug("JWT is invalid or expired, checking refresh token")
             
             # Try refresh if available
             if self._is_refresh_valid():
-                _LOGGER.debug("Refresh token is valid, attempting token refresh")
                 if await self._refresh_tokens():
-                    _LOGGER.debug("Token refresh successful")
                     return True
-                else:
-                    _LOGGER.debug("Token refresh failed, falling back to login")
-            else:
-                _LOGGER.debug("Refresh token is invalid or expired")
             
             # Fall back to password login
-            _LOGGER.debug("Attempting password-based login")
             return await self._perform_login()
             
         except Exception as e:
@@ -457,14 +428,9 @@ class CheckwattManager:
     async def _save_session(self) -> bool:
         """Save current session to file with encryption."""
         if not self._session_config['session_file'] or not aiofiles:
-            _LOGGER.debug("Session saving skipped: no file path or aiofiles unavailable")
             return False
         
         try:
-            _LOGGER.debug("Saving session to %s (encrypted: %s)", 
-                         self._session_config['session_file'],
-                         self._session_config['encrypt_sessions'])
-            
             session_data = {
                 'version': '1.0',
                 'username': self.username,
@@ -484,7 +450,6 @@ class CheckwattManager:
             async with aiofiles.open(self._session_config['session_file'], 'w') as f:
                 await f.write(encrypted_data)
             
-            _LOGGER.debug("Session saved to %s", self._session_config['session_file'])
             return True
             
         except Exception as e:
@@ -494,17 +459,11 @@ class CheckwattManager:
     async def _load_session(self) -> bool:
         """Load session from file and validate."""
         if not self._session_config['session_file'] or not aiofiles:
-            _LOGGER.debug("Session loading skipped: no file path or aiofiles unavailable")
             return False
         
         try:
             if not os.path.exists(self._session_config['session_file']):
-                _LOGGER.debug("Session file does not exist: %s", self._session_config['session_file'])
                 return False
-            
-            _LOGGER.debug("Loading session from %s (encrypted: %s)", 
-                         self._session_config['session_file'],
-                         self._session_config['encrypt_sessions'])
             
             # Read session file
             async with aiofiles.open(self._session_config['session_file'], 'r') as f:
@@ -537,7 +496,6 @@ class CheckwattManager:
             self.refresh_token = self._auth_state['refresh_token']
             self.refresh_token_expires = self._auth_state['refresh_expires_at']
             
-            _LOGGER.debug("Session restored from %s", self._session_config['session_file'])
             return True
             
         except Exception as e:
@@ -558,7 +516,6 @@ class CheckwattManager:
         if self._session_config['session_file'] and os.path.exists(self._session_config['session_file']):
             try:
                 os.remove(self._session_config['session_file'])
-                _LOGGER.debug("Session file removed")
             except Exception as e:
                 _LOGGER.error("Failed to remove session file: %s", e)
 
@@ -737,9 +694,6 @@ class CheckwattManager:
             # Perform request with retry logic
             for attempt in range(self.max_retries_429 + 1):
                 try:
-                    _LOGGER.debug("Making %s request to %s (attempt %d)", 
-                                 method, endpoint, attempt + 1)
-                    
                     async with self.session.request(
                         method,
                         self.base_url + endpoint,
@@ -1425,62 +1379,6 @@ class CheckwattManager:
                 else:
                     self.fcrd_info = None
                 break  # stop so we get the first row in logbook
-
-
-
-
-
-
-
-    async def fetch_and_return_net_revenue(self, from_date, to_date):
-        """Fetch FCR-D revenues from CheckWatt as per provided range."""
-        try:
-            site_id = await self.get_site_id()
-            # Validate date format and ensure they are dates
-            date_format = "%Y-%m-%d"
-            try:
-                from_date = datetime.strptime(from_date, date_format).date()
-                to_date = datetime.strptime(to_date, date_format).date()
-            except ValueError:
-                raise ValueError(
-                    "Input dates must be valid dates with the format YYYY-MM-DD."
-                )
-
-            # Validate from_date and to_date
-            today = date.today()
-            six_months_ago = today - relativedelta(months=6)
-
-            if not (six_months_ago <= from_date <= today):
-                raise ValueError(
-                    "From date must be within the last 6 months and not beyond today."
-                )
-
-            if not (six_months_ago <= to_date <= today):
-                raise ValueError(
-                    "To date must be within the last 6 months and not beyond today."
-                )
-
-            if from_date >= to_date:
-                raise ValueError("From date must be before To date.")
-
-            # Extend to_date by one day
-            to_date += timedelta(days=1)
-
-            endpoint = (
-                f"/revenue/{site_id}?from={from_date}&to={to_date}&resolution=day"
-            )
-
-            result = await self._request("GET", endpoint, auth_required=True)
-            if result is False:
-                return None
-            
-            return result
-
-        except Exception as error:
-            _LOGGER.error("Error in fetchand_return_net_revenue: %s", error)
-            return None
-
-
 
     def _build_series_endpoint(self, grouping):
         end_date = datetime.now() + timedelta(days=2)
