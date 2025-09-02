@@ -213,6 +213,13 @@ class CheckwattManager:
                     )
                     return False
 
+                if response.status == 404:
+                    # Kill was requested by removing kill-switch file
+                    _LOGGER.error(
+                        "CheckWatt has requested to back down by removing kill-switch file"
+                    )
+                    return False
+
                 if response.status == 401:
                     _LOGGER.error(
                         "Unauthorized: Check your CheckWatt authentication credentials"
