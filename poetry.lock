@@ -1086,6 +1086,18 @@ urllib3 = ">=1.25.10,<3.0"
 tests = ["coverage (>=6.0.0)", "flake8", "mypy", "pytest (>=7.0.0)", "pytest-asyncio", "pytest-cov", "pytest-httpserver", "tomli ; python_version < \"3.11\"", "tomli-w", "types-PyYAML", "types-requests"]
 
 [[package]]
+name = "simple-jwt-decode"
+version = "0.10.0"
+description = "Simple Python Package for decoding JWT claims and checking if its expired. No verification of signatures."
+optional = false
+python-versions = ">=3.7"
+groups = ["main"]
+files = [
+    {file = "simple_jwt_decode-0.10.0-py3-none-any.whl", hash = "sha256:dfd144499881db52ed7636afc156bf17fb4b8fab33ed6220ad4bf86723fe9a2c"},
+    {file = "simple_jwt_decode-0.10.0.tar.gz", hash = "sha256:f3ee891c67e51e27e0ac9f7efa2f2247cf87ab725d0223f727fd63fc029a874c"},
+]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 description = "Python 2 and 3 compatibility utilities"
@@ -1292,4 +1304,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.13"
-content-hash = "17bd3e9ee46733a0417a765832535112c9d8eb922ad442b8695b12f29f2c9c7f"
+content-hash = "5fa19c5c639b5ed59f3a7ac171e2099839918d68c54d020baf5acb1fbb7fd31d"

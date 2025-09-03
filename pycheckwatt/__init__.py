@@ -28,14 +28,23 @@ from datetime import date, datetime, timedelta
 
 from aiohttp import ClientError, ClientResponseError, ClientSession
 from dateutil.relativedelta import relativedelta
+from dateutil import parser
+from dataclasses import dataclass
+
+from simple_jwt import jwt
 
 _LOGGER = logging.getLogger(__name__)
 
+@dataclass
+class CheckwattAuthInfo:
+    jwt_token: str = ""
+    refresh_token: str = ""
+    refresh_token_expires: str = ""
 
 class CheckwattManager:
     """CheckWatt manager."""
 
-    def __init__(self, username, password, application="pyCheckwatt") -> None:
+    def __init__(self, username, password, auth_info, application="pyCheckwatt") -> None:
         """Initialize the CheckWatt manager."""
         if username is None or password is None:
             raise ValueError("Username and password must be provided.")
@@ -49,8 +58,7 @@ class CheckwattManager:
         self.revenueyear = None
         self.revenueyeartotal = 0
         self.revenuemonth = 0
-        self.jwt_token = None
-        self.refresh_token = None
+        self.auth_info = auth_info
         self.customer_details = None
         self.battery_registration = None
         self.battery_charge_peak_ac = None
@@ -225,6 +233,32 @@ class CheckwattManager:
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(url, headers, error)
 
+    async def _refresh_token(self):
+        """Refresh JWT."""
+        try:
+            endpoint = "/user/RefreshToken?audience=eib"
+
+            # Define headers with the JwtToken
+            headers = {
+                **self._get_headers(),
+                "authorization": f"RefreshToken {self.auth_info.refresh_token}",
+            }
+
+            async with self.session.get(
+                self.base_url + endpoint, headers=headers
+            ) as response:
+                data = await response.json()
+                if response.status == 200:
+                    self.auth_info.jwt_token = data.get("JwtToken")
+                    self.auth_info.refresh_token = data.get("RefreshToken")
+                    self.auth_info.refresh_token_expires = data.get("RefreshTokenExpires")
+                    return True
+
+                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
+                return False
+        except (ClientResponseError, ClientError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
+
     async def login(self):
         """Login to CheckWatt."""
         try:
@@ -232,6 +266,17 @@ class CheckwattManager:
                 # CheckWatt want us to back down.
                 return False
             _LOGGER.debug("Kill-switch not enabled, continue")
+
+            # return early if the token is valid or we manage to refresh the token
+            if self.auth_info.jwt_token and not jwt.is_expired(self.auth_info.jwt_token):
+                _LOGGER.debug("re-using JWT token, as it is not expired")
+                return True
+            elif self.auth_info.refresh_token and datetime.now().timestamp() < parser.parse(self.auth_info.refresh_token_expires).timestamp():
+                _LOGGER.debug("refresh the JWT token, instead of a full login.")
+                if await self._refresh_token():
+                    return True
+
+            _LOGGER.debug("Running full login flow")
 
             credentials = f"{self.username}:{self.password}"
             encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
@@ -256,8 +301,9 @@ class CheckwattManager:
             ) as response:
                 data = await response.json()
                 if response.status == 200:
-                    self.jwt_token = data.get("JwtToken")
-                    self.refresh_token = data.get("RefreshToken")
+                    self.auth_info.jwt_token = data.get("JwtToken")
+                    self.auth_info.refresh_token = data.get("RefreshToken")
+                    self.auth_info.refresh_token_expires = data.get("RefreshTokenExpires")
                     return True
 
                 if response.status == 401:
@@ -280,7 +326,7 @@ class CheckwattManager:
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
             async with self.session.get(
@@ -371,7 +417,7 @@ class CheckwattManager:
             endpoint = f"/Site/SiteIdBySerial?serial={self.rpi_serial}"
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
             async with self.session.get(
@@ -428,7 +474,7 @@ class CheckwattManager:
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
             # First fetch the revenue
@@ -477,7 +523,7 @@ class CheckwattManager:
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
             # First fetch the revenue
             async with self.session.get(
@@ -517,7 +563,7 @@ class CheckwattManager:
                 # Define headers with the JwtToken
                 headers = {
                     **self._get_headers(),
-                    "authorization": f"Bearer {self.jwt_token}",
+                    "authorization": f"Bearer {self.auth_info.jwt_token}",
                 }
                 # First fetch the revenue
                 async with self.session.get(
@@ -549,7 +595,7 @@ class CheckwattManager:
                     # Define headers with the JwtToken
                     headers = {
                         **self._get_headers(),
-                        "authorization": f"Bearer {self.jwt_token}",
+                        "authorization": f"Bearer {self.auth_info.jwt_token}",
                     }
                     # First fetch the revenue
                     async with self.session.get(
@@ -614,7 +660,7 @@ class CheckwattManager:
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
             # First fetch the revenue
             async with self.session.get(
@@ -662,7 +708,7 @@ class CheckwattManager:
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
             # First fetch the revenue
@@ -693,7 +739,7 @@ class CheckwattManager:
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
             # Fetch Energy Flows
@@ -727,7 +773,7 @@ class CheckwattManager:
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
             # Fetch Energy Flows
@@ -757,7 +803,7 @@ class CheckwattManager:
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
             # First fetch the revenue
@@ -792,7 +838,7 @@ class CheckwattManager:
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
             # First fetch the revenue
@@ -823,7 +869,7 @@ class CheckwattManager:
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
-                "authorization": f"Bearer {self.jwt_token}",
+                "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
             # First fetch the revenue
