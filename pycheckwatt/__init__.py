@@ -227,7 +227,7 @@ class CheckwattManager:
                     )
                     return False
 
-                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
+                _LOGGER.error("Unexpected HTTP status code: %s from: %s", response.status, url)
                 return False
 
         except (ClientResponseError, ClientError) as error:
