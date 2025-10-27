@@ -244,6 +244,8 @@ class CheckwattManager:
                 "authorization": f"RefreshToken {self.auth_info.refresh_token}",
             }
 
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
             ) as response:
@@ -254,7 +256,7 @@ class CheckwattManager:
                     self.auth_info.refresh_token_expires = data.get("RefreshTokenExpires")
                     return True
 
-                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
+                _LOGGER.error("Unexpected HTTP status code: %s from: %s", response.status, self.base_url + endpoint)
                 return False
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
@@ -292,6 +294,8 @@ class CheckwattManager:
                 "OneTimePassword": "",
             }
 
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
             timeout_seconds = 10
             async with self.session.post(
                 self.base_url + endpoint,
@@ -312,7 +316,7 @@ class CheckwattManager:
                     )
                     return False
 
-                _LOGGER.error("Unexpected HTTP status code: %s", response.status)
+                _LOGGER.error("Unexpected HTTP status code: %s from: %s", response.status, self.base_url + endpoint)
                 return False
 
         except (ClientResponseError, ClientError) as error:
@@ -328,6 +332,8 @@ class CheckwattManager:
                 **self._get_headers(),
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
+
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
 
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -420,6 +426,8 @@ class CheckwattManager:
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
             ) as response:
@@ -477,6 +485,8 @@ class CheckwattManager:
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
             # First fetch the revenue
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -525,6 +535,9 @@ class CheckwattManager:
                 **self._get_headers(),
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
+
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
             # First fetch the revenue
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -565,6 +578,9 @@ class CheckwattManager:
                     **self._get_headers(),
                     "authorization": f"Bearer {self.auth_info.jwt_token}",
                 }
+
+                _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
                 # First fetch the revenue
                 async with self.session.get(
                     self.base_url + endpoint, headers=headers
@@ -597,6 +613,9 @@ class CheckwattManager:
                         **self._get_headers(),
                         "authorization": f"Bearer {self.auth_info.jwt_token}",
                     }
+
+                    _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
                     # First fetch the revenue
                     async with self.session.get(
                         self.base_url + endpoint, headers=headers
@@ -662,6 +681,9 @@ class CheckwattManager:
                 **self._get_headers(),
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
+
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
             # First fetch the revenue
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -711,6 +733,8 @@ class CheckwattManager:
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
             # First fetch the revenue
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -741,6 +765,8 @@ class CheckwattManager:
                 **self._get_headers(),
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
+
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
 
             # Fetch Energy Flows
             async with self.session.get(
@@ -776,6 +802,8 @@ class CheckwattManager:
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
             # Fetch Energy Flows
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -805,6 +833,8 @@ class CheckwattManager:
                 **self._get_headers(),
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
+
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
 
             # First fetch the revenue
             async with self.session.get(
@@ -841,6 +871,8 @@ class CheckwattManager:
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
             # First fetch the revenue
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -872,6 +904,8 @@ class CheckwattManager:
                 "authorization": f"Bearer {self.auth_info.jwt_token}",
             }
 
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
+
             # First fetch the revenue
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -902,6 +936,8 @@ class CheckwattManager:
             headers = {
                 **self._get_headers(),
             }
+
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
 
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
@@ -937,6 +973,7 @@ class CheckwattManager:
                 return False
 
             endpoint = f"/register/checkrpiv2?rpi={rpi_serial}"
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
             # First fetch the revenue
             async with self.session.get(
                 self.base_url + endpoint,
@@ -968,6 +1005,7 @@ class CheckwattManager:
                 return False
 
             endpoint = f"/asset/status?meterId={meter_id}"
+            _LOGGER.debug("Making request to: %s", self.base_url + endpoint)
             # First fetch the revenue
             async with self.session.get(
                 self.base_url + endpoint,
