@@ -5,7 +5,7 @@ import json
 import os
 import time
 
-from pycheckwatt import CheckwattManager, CheckwattAuthInfo
+from pycheckwatt import CheckwattManager, CheckwattStateInfo
 
 
 async def main(show_details=False):
@@ -13,10 +13,10 @@ async def main(show_details=False):
     password = os.getenv("CHECKWATT_PASSWORD")
 
     # create authinfo object to persist between sessions
-    auth_info = CheckwattAuthInfo()
+    state_info = CheckwattStateInfo()
 
     # Create the async class
-    async with CheckwattManager(username, password, auth_info) as check_watt_instance:
+    async with CheckwattManager(username, password, state_info) as check_watt_instance:
         try:
             # Login to EnergyInBalance and check kill switch
             if await check_watt_instance.login():
@@ -116,8 +116,8 @@ async def main(show_details=False):
         except Exception as e:
             print(f"An error occurred: {e}")
 
-    # Do another session, re-using the auth_info, and see if we re-use the JWT
-    async with CheckwattManager(username, password, auth_info) as check_watt_instance:
+    # Do another session, re-using the state_info, and see if we re-use the JWT
+    async with CheckwattManager(username, password, state_info) as check_watt_instance:
         try:
             # Login to EnergyInBalance and check kill switch
             if await check_watt_instance.login():
@@ -131,8 +131,8 @@ async def main(show_details=False):
             print(f"An error occurred: {e}")
 
     # one more time, get rid of token so we don't have to wait
-    auth_info.jwt_token = ""
-    async with CheckwattManager(username, password, auth_info) as check_watt_instance:
+    state_info.jwt_token = ""
+    async with CheckwattManager(username, password, state_info) as check_watt_instance:
         try:
             # Login to EnergyInBalance and check kill switch
             if await check_watt_instance.login():

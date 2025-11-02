@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 import pytest_asyncio
 
-from pycheckwatt import CheckwattManager
+from pycheckwatt import CheckwattManager, CheckwattStateInfo
 from tests.fixtures.sample_responses import (
     SAMPLE_CUSTOMER_DETAILS_JSON,
     SAMPLE_EMS_SETTINGS_RESPONSE,
@@ -23,25 +23,25 @@ class TestCheckwattManagerInitialization:
 
     def test_manager_creation_with_valid_credentials(self):
         """Test that manager can be created with username and password."""
-        manager = CheckwattManager("test_user", "test_pass")
+        manager = CheckwattManager("test_user", "test_pass", CheckwattStateInfo())
 
         assert manager.username == "test_user"
         assert manager.password == "test_pass"
         assert manager.session is None  # Not initialized until async context
-        assert manager.jwt_token is None  # Not set until login
+        assert manager.state_info.jwt_token is ""  # Not set until login
 
     def test_manager_creation_with_invalid_credentials(self):
         """Test that manager creation fails with invalid credentials."""
         with pytest.raises(ValueError, match="Username and password must be provided"):
-            CheckwattManager(None, "password")
+            CheckwattManager(None, "password", CheckwattStateInfo())
 
         with pytest.raises(ValueError, match="Username and password must be provided"):
-            CheckwattManager("username", None)
+            CheckwattManager("username", None, CheckwattStateInfo())
 
     @pytest.mark.asyncio
     async def test_async_context_manager(self):
         """Test that manager works as async context manager."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
             assert manager.session is not None
             assert hasattr(manager.session, "get")  # Verify it's an aiohttp session
 
@@ -52,7 +52,7 @@ class TestAuthentication:
     @pytest.mark.asyncio
     async def test_login_success(self):
         """Test successful login flow."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             with patch("aiohttp.ClientSession.post") as mock_post, patch(
                 "aiohttp.ClientSession.get"
@@ -74,13 +74,13 @@ class TestAuthentication:
                 result = await manager.login()
 
                 assert result is True
-                assert manager.jwt_token == SAMPLE_LOGIN_RESPONSE["JwtToken"]
-                assert manager.refresh_token == SAMPLE_LOGIN_RESPONSE["RefreshToken"]
+                assert manager.state_info.jwt_token == SAMPLE_LOGIN_RESPONSE["JwtToken"]
+                assert manager.state_info.refresh_token == SAMPLE_LOGIN_RESPONSE["RefreshToken"]
 
     @pytest.mark.asyncio
     async def test_login_requires_kill_switch_check(self):
         """Test that login checks kill switch first."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             with patch("aiohttp.ClientSession.get") as mock_get:
                 # Mock kill switch as enabled (should block login)
@@ -92,7 +92,7 @@ class TestAuthentication:
                 result = await manager.login()
 
                 assert result is False
-                assert manager.jwt_token is None
+                assert manager.state_info.jwt_token is ""
 
 
 class TestCustomerDataRetrieval:
@@ -101,7 +101,7 @@ class TestCustomerDataRetrieval:
     @pytest.mark.asyncio
     async def test_get_customer_details_success(self):
         """Test successful customer details retrieval."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             manager.jwt_token = "test_token"
 
@@ -123,7 +123,7 @@ class TestCustomerDataRetrieval:
     @pytest.mark.asyncio
     async def test_customer_details_populates_battery_registration(self):
         """Test that customer details parsing extracts battery registration."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo())as manager:
 
             manager.jwt_token = "test_token"
 
@@ -147,7 +147,7 @@ class TestCustomerDataRetrieval:
     @pytest.mark.asyncio
     async def test_customer_details_extracts_fcrd_state(self):
         """Test that customer details parsing extracts FCR-D state from logbook."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             manager.jwt_token = "test_token"
 
@@ -174,7 +174,7 @@ class TestPropertyAccess:
     @pytest_asyncio.fixture
     async def authenticated_manager(self):
         """Fixture providing an authenticated manager with customer details loaded."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             manager.jwt_token = "test_token"
 
@@ -223,7 +223,7 @@ class TestPropertyAccess:
 
     def test_properties_fail_without_data(self):
         """Test that properties fail appropriately when data isn't loaded."""
-        manager = CheckwattManager("test_user", "test_pass")
+        manager = CheckwattManager("test_user", "test_pass", CheckwattStateInfo())
 
         # These should fail before get_customer_details()
         with pytest.raises(TypeError, match="NoneType"):
@@ -242,7 +242,7 @@ class TestEnergyDataRetrieval:
     @pytest.mark.asyncio
     async def test_get_power_data_success(self):
         """Test successful power data retrieval."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             manager.jwt_token = "test_token"
             manager.customer_details = (
@@ -265,7 +265,7 @@ class TestEnergyDataRetrieval:
     @pytest.mark.asyncio
     async def test_energy_properties_after_power_data_load(self):
         """Test energy properties work after power data is loaded."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             manager.jwt_token = "test_token"
             manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON
@@ -294,7 +294,7 @@ class TestFCRDRevenue:
     @pytest.mark.asyncio
     async def test_fcrd_revenue_methods_require_site_id(self):
         """Test that FCR-D revenue methods require RPI serial for site ID lookup."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             manager.jwt_token = "test_token"
 
@@ -305,7 +305,7 @@ class TestFCRDRevenue:
     @pytest.mark.asyncio
     async def test_fcrd_revenue_methods_success(self):
         """Test successful FCR-D revenue retrieval."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             manager.jwt_token = "test_token"
 
@@ -349,7 +349,7 @@ class TestEMSSettings:
     @pytest.mark.asyncio
     async def test_get_ems_settings_success(self):
         """Test successful EMS settings retrieval."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             manager.jwt_token = "test_token"
             manager.customer_details = SAMPLE_CUSTOMER_DETAILS_JSON
@@ -377,7 +377,7 @@ class TestCompleteWorkflow:
     @pytest.mark.asyncio
     async def test_example_py_workflow(self):
         """Test the complete happy path workflow."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             # Step 1: Login
             with patch("aiohttp.ClientSession.post") as mock_post, patch(
@@ -464,7 +464,7 @@ class TestMethodCallDependencies:
     async def test_customer_properties_require_get_customer_details(self):
         """Test that customer properties require get_customer_details()
         to be called first."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             # Before get_customer_details()
             with pytest.raises((TypeError, AttributeError)):
@@ -488,7 +488,7 @@ class TestMethodCallDependencies:
     @pytest.mark.asyncio
     async def test_energy_properties_require_get_power_data(self):
         """Test that energy properties require get_power_data() to be called first."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             # Before get_power_data()
             with pytest.raises(AttributeError):
@@ -513,7 +513,7 @@ class TestMethodCallDependencies:
     async def test_ems_settings_property_requires_get_ems_settings(self):
         """Test that ems_settings property requires get_ems_settings()
         to be called first."""
-        async with CheckwattManager("test_user", "test_pass") as manager:
+        async with CheckwattManager("test_user", "test_pass", CheckwattStateInfo()) as manager:
 
             # Before get_ems_settings()
             with pytest.raises(TypeError):
@@ -542,7 +542,7 @@ class TestFCRDStateExtraction:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.manager = CheckwattManager("test_user", "test_pass")
+        self.manager = CheckwattManager("test_user", "test_pass", CheckwattStateInfo())
 
     def test_fail_activation_with_retry_count_and_complex_power(self):
         """Test parsing of FAIL ACTIVATION entries with retry count and complex power format."""

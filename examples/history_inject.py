@@ -18,6 +18,9 @@ async def main():
         print("You need to update EIB_USERNAME/EIB_PASSWORD")
         return
 
+    # create authinfo object to persist between sessions
+    state_info = CheckwattStateInfo()
+
     async with CheckwattManager(EIB_USERNAME, EIB_PASSWORD, "cwTest") as cw:
         try:
             # Login to EnergyInBalance
