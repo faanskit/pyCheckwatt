@@ -34,11 +34,10 @@ from dataclasses import dataclass
 
 from simple_jwt import jwt
 
-from .const import (
-    KILLSWITCH_INTERVAL
-)
+from .const import KILLSWITCH_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
+
 
 @dataclass
 class CheckwattStateInfo:
@@ -209,8 +208,15 @@ class CheckwattManager:
     async def _continue_kill_switch_not_enabled(self):
         """Check if CheckWatt has requested integrations to back-off."""
 
-        _LOGGER.debug("Last killswitch state: %r, next test: %s", self.state_info.killswitch_ok, self.state_info.next_killswitch_test)
-        if self.state_info.next_killswitch_test and datetime.now() < self.state_info.next_killswitch_test:
+        _LOGGER.debug(
+            "Last killswitch state: %r, next test: %s",
+            self.state_info.killswitch_ok,
+            self.state_info.next_killswitch_test,
+        )
+        if (
+            self.state_info.next_killswitch_test
+            and datetime.now() < self.state_info.next_killswitch_test
+        ):
             return self.state_info.killswitch_ok
         try:
             url = "https://checkwatt.se/ha-killswitch.txt"
@@ -231,10 +237,16 @@ class CheckwattManager:
                         # then randomize the check within the next 15min
                         # otherwise check again in 15min
                         if not self.state_info.next_killswitch_test:
-                            random_interval = random.random() * timedelta(minutes=KILLSWITCH_INTERVAL)
-                            self.state_info.next_killswitch_test = datetime.now() + random_interval
+                            random_interval = random.random() * timedelta(
+                                minutes=KILLSWITCH_INTERVAL
+                            )
+                            self.state_info.next_killswitch_test = (
+                                datetime.now() + random_interval
+                            )
                         else:
-                            self.state_info.next_killswitch_test = datetime.now() + timedelta(minutes=KILLSWITCH_INTERVAL)
+                            self.state_info.next_killswitch_test = (
+                                datetime.now() + timedelta(minutes=KILLSWITCH_INTERVAL)
+                            )
                         return True
 
                     # Kill was requested
@@ -242,7 +254,9 @@ class CheckwattManager:
                         "CheckWatt has requested to back down by enabling the kill-switch"  # noqa: E501
                     )
                     # wait 15 minutes for next retry if the kill switch was enabled
-                    self.state_info.next_killswitch_test = datetime.now() + timedelta(minutes=KILLSWITCH_INTERVAL)
+                    self.state_info.next_killswitch_test = datetime.now() + timedelta(
+                        minutes=KILLSWITCH_INTERVAL
+                    )
                     self.state_info.killswitch_ok = False
                     return False
 
@@ -252,25 +266,30 @@ class CheckwattManager:
                     )
                     self.state_info.killswitch_ok = False
                 elif response.status == 404:
-                    _LOGGER.error(
-                        "Checkwatt Killswitch is missing, 404."
-                    )
+                    _LOGGER.error("Checkwatt Killswitch is missing, 404.")
 
                     # wait 15 minutes for next retry on 404s
-                    self.state_info.next_killswitch_test = datetime.now() + timedelta(minutes=KILLSWITCH_INTERVAL)
+                    self.state_info.next_killswitch_test = datetime.now() + timedelta(
+                        minutes=KILLSWITCH_INTERVAL
+                    )
 
                     self.state_info.killswitch_ok = False
                 elif response.status == 429:
                     _LOGGER.warning("Got HTTP 429 from HA killswitch, retry later")
                     # If we get a indication of when to retry, use that to set the next test time
                     # otherwise, we just check again next time around
-                    if response.headers['retry-after']:
-                        self.state_info.next_killswitch_test = datetime.now() + timedelta(seconds=int(response.headers['retry-after']))
+                    if response.headers["retry-after"]:
+                        self.state_info.next_killswitch_test = (
+                            datetime.now()
+                            + timedelta(seconds=int(response.headers["retry-after"]))
+                        )
                     self.state_info.killswitch_ok = False
                 else:
-                    _LOGGER.error("Unexpected HTTP status code: %s from: %s", response.status, url)
+                    _LOGGER.error(
+                        "Unexpected HTTP status code: %s from: %s", response.status, url
+                    )
                     self.state_info.killswitch_ok = False
-               
+
                 return False
 
         except (ClientResponseError, ClientError) as error:
@@ -297,10 +316,16 @@ class CheckwattManager:
                 if response.status == 200:
                     self.state_info.jwt_token = data.get("JwtToken")
                     self.state_info.refresh_token = data.get("RefreshToken")
-                    self.state_info.refresh_token_expires = data.get("RefreshTokenExpires")
+                    self.state_info.refresh_token_expires = data.get(
+                        "RefreshTokenExpires"
+                    )
                     return True
 
-                _LOGGER.error("Unexpected HTTP status code: %s from: %s", response.status, self.base_url + endpoint)
+                _LOGGER.error(
+                    "Unexpected HTTP status code: %s from: %s",
+                    response.status,
+                    self.base_url + endpoint,
+                )
                 return False
         except (ClientResponseError, ClientError) as error:
             return await self.handle_client_error(endpoint, headers, error)
@@ -314,10 +339,16 @@ class CheckwattManager:
             _LOGGER.debug("Kill-switch not enabled, continue")
 
             # return early if the token is valid or we manage to refresh the token
-            if self.state_info.jwt_token and not jwt.is_expired(self.state_info.jwt_token):
+            if self.state_info.jwt_token and not jwt.is_expired(
+                self.state_info.jwt_token
+            ):
                 _LOGGER.debug("re-using JWT token, as it is not expired")
                 return True
-            elif self.state_info.refresh_token and datetime.now().timestamp() < parser.parse(self.state_info.refresh_token_expires).timestamp():
+            elif (
+                self.state_info.refresh_token
+                and datetime.now().timestamp()
+                < parser.parse(self.state_info.refresh_token_expires).timestamp()
+            ):
                 _LOGGER.debug("refresh the JWT token, instead of a full login.")
                 if await self._refresh_token():
                     return True
@@ -351,7 +382,9 @@ class CheckwattManager:
                 if response.status == 200:
                     self.state_info.jwt_token = data.get("JwtToken")
                     self.state_info.refresh_token = data.get("RefreshToken")
-                    self.state_info.refresh_token_expires = data.get("RefreshTokenExpires")
+                    self.state_info.refresh_token_expires = data.get(
+                        "RefreshTokenExpires"
+                    )
                     return True
 
                 if response.status == 401:
@@ -360,7 +393,11 @@ class CheckwattManager:
                     )
                     return False
 
-                _LOGGER.error("Unexpected HTTP status code: %s from: %s", response.status, self.base_url + endpoint)
+                _LOGGER.error(
+                    "Unexpected HTTP status code: %s from: %s",
+                    response.status,
+                    self.base_url + endpoint,
+                )
                 return False
 
         except (ClientResponseError, ClientError) as error:
