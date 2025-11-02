@@ -31,10 +31,10 @@ from aiohttp import ClientError, ClientResponseError, ClientSession
 from dateutil.relativedelta import relativedelta
 from dateutil import parser
 from dataclasses import dataclass
-
 from simple_jwt import jwt
+from time import time
 
-from .const import KILLSWITCH_INTERVAL
+from .const import KILLSWITCH_INTERVAL, JWT_MARGIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -195,6 +195,15 @@ class CheckwattManager:
                     self.fcrd_info = None
                 break  # stop so we get the first row in logbook
 
+    def _jwt_expired(self):
+        if self.state_info.jwt_token:
+            decoded_token = jwt.decode(self.state_info.jwt_token)
+            # time() time since epoch in seconds.
+            return decoded_token["claims"]["exp"]-(60*JWT_MARGIN) < time()
+
+        # always return exired, if there is no token
+        return True
+
     async def handle_client_error(self, endpoint, headers, error):
         """Handle ClientError and log relevant information."""
         _LOGGER.error(
@@ -339,15 +348,16 @@ class CheckwattManager:
             _LOGGER.debug("Kill-switch not enabled, continue")
 
             # return early if the token is valid or we manage to refresh the token
-            if self.state_info.jwt_token and not jwt.is_expired(
-                self.state_info.jwt_token
-            ):
+            if self.state_info.jwt_token and not self._jwt_expired():
                 _LOGGER.debug("re-using JWT token, as it is not expired")
                 return True
-            elif (
+            if (
                 self.state_info.refresh_token
                 and datetime.now().timestamp()
-                < parser.parse(self.state_info.refresh_token_expires).timestamp()
+                < (
+                    parser.parse(self.state_info.refresh_token_expires)
+                    - timedelta(minutes=JWT_MARGIN)
+                ).timestamp()
             ):
                 _LOGGER.debug("refresh the JWT token, instead of a full login.")
                 if await self._refresh_token():
