@@ -1,7 +1,8 @@
 """Docstring."""
 
 SENSOR = "SENSOR"
-
+KILLSWITCH_INTERVAL = 15
+JWT_MARGIN = 1
 
 class Device:
     """Docstring."""

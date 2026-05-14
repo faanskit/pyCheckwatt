@@ -3,16 +3,20 @@
 import argparse
 import json
 import os
+import time
 
-from pycheckwatt import CheckwattManager
+from pycheckwatt import CheckwattManager, CheckwattStateInfo
 
 
 async def main(show_details=False):
     username = os.getenv("CHECKWATT_USERNAME")
     password = os.getenv("CHECKWATT_PASSWORD")
 
+    # create authinfo object to persist between sessions
+    state_info = CheckwattStateInfo()
+
     # Create the async class
-    async with CheckwattManager(username, password) as check_watt_instance:
+    async with CheckwattManager(username, password, state_info) as check_watt_instance:
         try:
             # Login to EnergyInBalance and check kill switch
             if await check_watt_instance.login():
@@ -112,6 +116,34 @@ async def main(show_details=False):
         except Exception as e:
             print(f"An error occurred: {e}")
 
+    # Do another session, re-using the state_info, and see if we re-use the JWT
+    async with CheckwattManager(username, password, state_info) as check_watt_instance:
+        try:
+            # Login to EnergyInBalance and check kill switch
+            if await check_watt_instance.login():
+                # Fetch customer detail
+                await check_watt_instance.get_customer_details()
+
+                # Do a sample
+                print("Customer Details\n================")
+                print(check_watt_instance.registered_owner)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+    # one more time, get rid of token so we don't have to wait
+    state_info.jwt_token = ""
+    async with CheckwattManager(username, password, state_info) as check_watt_instance:
+        try:
+            # Login to EnergyInBalance and check kill switch
+            if await check_watt_instance.login():
+                # Fetch customer detail
+                await check_watt_instance.get_customer_details()
+
+                # Do a sample
+                print("Customer Details\n================")
+                print(check_watt_instance.registered_owner)
+        except Exception as e:
+            print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Checkwatt Information")
