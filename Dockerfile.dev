@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
 WORKDIR /app
-# Install all dependencies (including dev)
-RUN pip install --no-cache-dir poetry
+# Install the same Poetry version used in CI
+RUN pip install --no-cache-dir poetry==2.1.4
 COPY pyproject.toml poetry.lock ./
 RUN poetry config virtualenvs.create false \
     && poetry install --no-root --no-interaction --no-ansi

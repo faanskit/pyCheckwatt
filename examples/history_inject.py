@@ -44,7 +44,7 @@ async def main():
                     return
 
                 async with CheckWattRankManager() as cwr:
-                    (status, stored_items, total_items) = (
+                    status, stored_items, total_items = (
                         await cwr.push_history_to_checkwatt_rank(
                             display_name=(
                                 DISPLAY_NAME_OVERRIDE
