@@ -20,26 +20,65 @@ Example:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
+import math
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 from aiohttp import ClientError, ClientResponseError, ClientSession
 from dateutil.relativedelta import relativedelta
 
 _LOGGER = logging.getLogger(__name__)
 
+KILL_SWITCH_URL = "https://checkwatt.se/ha-killswitch.txt"
+DEFAULT_KILL_SWITCH_INTERVAL = timedelta(minutes=15)
+KILL_SWITCH_ERROR_INTERVAL = timedelta(minutes=1)
+DEFAULT_RATE_LIMIT_RETRY = timedelta(minutes=1)
+TOKEN_EXPIRY_MARGIN = timedelta(minutes=1)
+
+
+class CheckwattError(Exception):
+    """Base exception for pyCheckwatt errors."""
+
+
+class CheckwattRateLimitError(CheckwattError):
+    """Raised when CheckWatt asks clients to retry later."""
+
+    def __init__(self, retry_after: timedelta) -> None:
+        """Initialize the rate-limit error."""
+        self.retry_after = retry_after
+        super().__init__(f"CheckWatt rate limited requests for {retry_after}")
+
 
 class CheckwattManager:
     """CheckWatt manager."""
 
-    def __init__(self, username, password, application="pyCheckwatt") -> None:
+    def __init__(
+        self,
+        username,
+        password,
+        application="pyCheckwatt",
+        *,
+        session: ClientSession | None = None,
+        raise_on_rate_limit: bool = False,
+    ) -> None:
         """Initialize the CheckWatt manager."""
         if username is None or password is None:
             raise ValueError("Username and password must be provided.")
-        self.session = None
+        self.session = session
+        self._owns_session = session is None
+        self._raise_on_rate_limit = raise_on_rate_limit
+        self._context_active = False
+        self._auth_lock = asyncio.Lock()
+        self._kill_switch_lock = asyncio.Lock()
+        self._kill_switch_interval = DEFAULT_KILL_SWITCH_INTERVAL
+        self._kill_switch_allowed = False
+        self._kill_switch_next_check: datetime | None = None
+        self._kill_switch_rate_limited_until: datetime | None = None
         self.base_url = "https://api.checkwatt.se"
         self.username = username
         self.password = password
@@ -51,6 +90,7 @@ class CheckwattManager:
         self.revenuemonth = 0
         self.jwt_token = None
         self.refresh_token = None
+        self.refresh_token_expires = None
         self.customer_details = None
         self.battery_registration = None
         self.battery_charge_peak_ac = None
@@ -82,12 +122,27 @@ class CheckwattManager:
 
     async def __aenter__(self):
         """Asynchronous enter."""
-        self.session = ClientSession()
-        return self
+        if self._context_active:
+            raise RuntimeError("CheckwattManager context is already active")
+
+        self._context_active = True
+        try:
+            if self.session is None or self.session.closed:
+                if not self._owns_session:
+                    raise RuntimeError("The injected HTTP session is closed")
+                self.session = ClientSession()
+            return self
+        except BaseException:
+            self._context_active = False
+            raise
 
     async def __aexit__(self, exc_type, exc_value, traceback):
         """Asynchronous exit."""
-        await self.session.close()
+        try:
+            if self._owns_session and self.session is not None:
+                await self.session.close()
+        finally:
+            self._context_active = False
 
     def _get_headers(self):
         """Define common headers."""
@@ -183,82 +238,233 @@ class CheckwattManager:
 
     async def handle_client_error(self, endpoint, headers, error):
         """Handle ClientError and log relevant information."""
+        if isinstance(error, ClientResponseError):
+            if error.status == 401:
+                self.jwt_token = None
+            elif error.status == 429:
+                response_headers = error.headers or {}
+                retry_after = self._retry_after(
+                    response_headers.get("Retry-After"),
+                    self._utcnow(),
+                    DEFAULT_RATE_LIMIT_RETRY,
+                )
+                if self._raise_on_rate_limit:
+                    raise CheckwattRateLimitError(retry_after) from error
+
+        url = endpoint if endpoint.startswith("http") else self.base_url + endpoint
         _LOGGER.error(
-            "An error occurred during the request. URL: %s, Headers: %s. Error: %s",
-            self.base_url + endpoint,
-            headers,
+            "An error occurred during the request. URL: %s. Error: %s",
+            url,
             error,
         )
         return False
 
+    @staticmethod
+    def _utcnow() -> datetime:
+        """Return the current UTC time."""
+        return datetime.now(timezone.utc)
+
+    def _jwt_is_valid(self) -> bool:
+        """Return whether the current JWT has enough lifetime left to use."""
+        if not self.jwt_token:
+            return False
+
+        try:
+            encoded_payload = self.jwt_token.split(".")[1]
+            encoded_payload += "=" * (-len(encoded_payload) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(encoded_payload))
+            expires_at = datetime.fromtimestamp(payload["exp"], timezone.utc)
+        except (
+            IndexError,
+            KeyError,
+            OSError,
+            OverflowError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            return False
+
+        return expires_at - TOKEN_EXPIRY_MARGIN > self._utcnow()
+
+    def _refresh_token_is_valid(self) -> bool:
+        """Return whether the refresh token has enough lifetime left to use."""
+        if not self.refresh_token or not self.refresh_token_expires:
+            return False
+
+        try:
+            expires_at = datetime.fromisoformat(
+                self.refresh_token_expires.replace("Z", "+00:00")
+            )
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+        return expires_at - TOKEN_EXPIRY_MARGIN > self._utcnow()
+
+    def _retry_after(
+        self,
+        value: str | None,
+        now: datetime,
+        default: timedelta,
+    ) -> timedelta:
+        """Parse and bound an HTTP Retry-After value."""
+        seconds = default.total_seconds()
+        if value:
+            try:
+                seconds = float(value)
+            except ValueError:
+                try:
+                    retry_at = parsedate_to_datetime(value)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    seconds = (retry_at - now).total_seconds()
+                except (TypeError, ValueError, OverflowError):
+                    pass
+
+        if not math.isfinite(seconds) or seconds < 1:
+            seconds = 1
+        return timedelta(seconds=seconds)
+
+    def _cached_kill_switch_result(self, now: datetime) -> bool | None:
+        """Return the cached kill-switch result while it remains valid."""
+        if not self._kill_switch_next_check or now >= self._kill_switch_next_check:
+            return None
+
+        rate_limited_until = self._kill_switch_rate_limited_until
+        if (
+            self._raise_on_rate_limit
+            and rate_limited_until
+            and now < rate_limited_until
+        ):
+            raise CheckwattRateLimitError(rate_limited_until - now)
+        return self._kill_switch_allowed
+
     async def _continue_kill_switch_not_enabled(self):
         """Check if CheckWatt has requested integrations to back-off."""
-        try:
-            url = "https://checkwatt.se/ha-killswitch.txt"
-            headers = {**self._get_headers()}
-            async with self.session.get(url, headers=headers) as response:
-                data = await response.text()
-                if response.status == 200:
-                    kill = data.strip()  # Remove leading and trailing whitespaces
-                    if kill == "0":
-                        # We are OK to continue
-                        _LOGGER.debug(
-                            "CheckWatt accepted and not enabled the kill-switch"
-                        )
-                        return True
+        now = self._utcnow()
+        cached_result = self._cached_kill_switch_result(now)
+        if cached_result is not None:
+            return cached_result
 
-                    # Kill was requested
-                    _LOGGER.error(
-                        "CheckWatt has requested to back down by enabling the kill-switch"  # noqa: E501
-                    )
+        async with self._kill_switch_lock:
+            now = self._utcnow()
+            cached_result = self._cached_kill_switch_result(now)
+            if cached_result is not None:
+                return cached_result
+
+            headers = {**self._get_headers()}
+            try:
+                async with self.session.get(
+                    KILL_SWITCH_URL, headers=headers, timeout=10
+                ) as response:
+                    if response.status == 200:
+                        data = await response.text()
+                        self._kill_switch_allowed = data.strip() == "0"
+                        self._kill_switch_next_check = now + self._kill_switch_interval
+                        self._kill_switch_rate_limited_until = None
+                        if self._kill_switch_allowed:
+                            _LOGGER.debug(
+                                "CheckWatt accepted and did not enable the kill-switch"
+                            )
+                        else:
+                            _LOGGER.error(
+                                "CheckWatt enabled the Home Assistant kill-switch"
+                            )
+                        return self._kill_switch_allowed
+
+                    if response.status == 429:
+                        retry_after = self._retry_after(
+                            response.headers.get("Retry-After"),
+                            now,
+                            self._kill_switch_interval,
+                        )
+                        self._kill_switch_allowed = False
+                        self._kill_switch_next_check = now + retry_after
+                        self._kill_switch_rate_limited_until = (
+                            self._kill_switch_next_check
+                        )
+                        if self._raise_on_rate_limit:
+                            raise CheckwattRateLimitError(retry_after)
+                        _LOGGER.warning(
+                            "CheckWatt rate limited requests for %s", retry_after
+                        )
+                        return False
+
+                    self._kill_switch_allowed = False
+                    self._kill_switch_next_check = now + KILL_SWITCH_ERROR_INTERVAL
+                    self._kill_switch_rate_limited_until = None
+                    _LOGGER.error("Unexpected HTTP status code: %s", response.status)
                     return False
 
+            except CheckwattRateLimitError:
+                raise
+            except (ClientError, asyncio.TimeoutError, TimeoutError) as error:
+                self._kill_switch_allowed = False
+                self._kill_switch_next_check = now + KILL_SWITCH_ERROR_INTERVAL
+                self._kill_switch_rate_limited_until = None
+                return await self.handle_client_error(KILL_SWITCH_URL, headers, error)
+
+    async def _refresh_login(self) -> bool:
+        """Refresh the login without sending the account password again."""
+        endpoint = "/user/RefreshToken?audience=eib"
+        headers = {
+            **self._get_headers(),
+            "authorization": f"RefreshToken {self.refresh_token}",
+        }
+
+        try:
+            async with self.session.get(
+                self.base_url + endpoint,
+                headers=headers,
+                timeout=10,
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    self.jwt_token = data.get("JwtToken")
+                    if "RefreshToken" in data:
+                        self.refresh_token = data.get("RefreshToken")
+                    if "RefreshTokenExpires" in data:
+                        self.refresh_token_expires = data.get("RefreshTokenExpires")
+                    return self._jwt_is_valid()
+
                 if response.status == 401:
-                    _LOGGER.error(
-                        "Unauthorized: Check your CheckWatt authentication credentials"
-                    )
+                    self.refresh_token = None
+                    self.refresh_token_expires = None
                     return False
 
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
                 return False
+        except (ClientError, asyncio.TimeoutError, TimeoutError) as error:
+            return await self.handle_client_error(endpoint, headers, error)
 
-        except (ClientResponseError, ClientError) as error:
-            return await self.handle_client_error(url, headers, error)
+    async def _password_login(self) -> bool:
+        """Authenticate using the configured username and password."""
+        credentials = f"{self.username}:{self.password}"
+        encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
+            "utf-8"
+        )
+        endpoint = "/user/Login?audience=eib"
+        headers = {
+            **self._get_headers(),
+            "authorization": f"Basic {encoded_credentials}",
+        }
+        payload = {"OneTimePassword": ""}
 
-    async def login(self):
-        """Login to CheckWatt."""
         try:
-            if not await self._continue_kill_switch_not_enabled():
-                # CheckWatt want us to back down.
-                return False
-            _LOGGER.debug("Kill-switch not enabled, continue")
-
-            credentials = f"{self.username}:{self.password}"
-            encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
-                "utf-8"
-            )
-            endpoint = "/user/Login?audience=eib"
-            # Define headers with the encoded credentials
-            headers = {
-                **self._get_headers(),
-                "authorization": f"Basic {encoded_credentials}",
-            }
-            payload = {
-                "OneTimePassword": "",
-            }
-
-            timeout_seconds = 10
             async with self.session.post(
                 self.base_url + endpoint,
                 headers=headers,
                 json=payload,
-                timeout=timeout_seconds,
+                timeout=10,
             ) as response:
-                data = await response.json()
                 if response.status == 200:
+                    data = await response.json()
                     self.jwt_token = data.get("JwtToken")
                     self.refresh_token = data.get("RefreshToken")
-                    return True
+                    self.refresh_token_expires = data.get("RefreshTokenExpires")
+                    return bool(self.jwt_token)
 
                 if response.status == 401:
                     _LOGGER.error(
@@ -268,9 +474,23 @@ class CheckwattManager:
 
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
                 return False
-
-        except (ClientResponseError, ClientError) as error:
+        except (ClientError, asyncio.TimeoutError, TimeoutError) as error:
             return await self.handle_client_error(endpoint, headers, error)
+
+    async def login(self):
+        """Ensure the manager has a valid login."""
+        if not await self._continue_kill_switch_not_enabled():
+            return False
+
+        if self._jwt_is_valid():
+            return True
+
+        async with self._auth_lock:
+            if self._jwt_is_valid():
+                return True
+            if self._refresh_token_is_valid() and await self._refresh_login():
+                return True
+            return await self._password_login()
 
     async def get_customer_details(self):
         """Fetch customer details from CheckWatt."""
