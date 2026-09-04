@@ -54,9 +54,10 @@ class TestAuthentication:
         """Test successful login flow."""
         async with CheckwattManager("test_user", "test_pass") as manager:
 
-            with patch("aiohttp.ClientSession.post") as mock_post, patch(
-                "aiohttp.ClientSession.get"
-            ) as mock_get:
+            with (
+                patch("aiohttp.ClientSession.post") as mock_post,
+                patch("aiohttp.ClientSession.get") as mock_get,
+            ):
 
                 # Mock kill switch check (always called first)
                 mock_killswitch = AsyncMock()
@@ -322,9 +323,10 @@ class TestFCRDRevenue:
                 await manager.get_customer_details()
 
             # Mock FCR-D revenue calls
-            with patch.object(
-                manager, "get_site_id", return_value="test_site_123"
-            ), patch("aiohttp.ClientSession.get") as mock_get:
+            with (
+                patch.object(manager, "get_site_id", return_value="test_site_123"),
+                patch("aiohttp.ClientSession.get") as mock_get,
+            ):
 
                 mock_response = AsyncMock()
                 mock_response.status = 200
@@ -380,9 +382,10 @@ class TestCompleteWorkflow:
         async with CheckwattManager("test_user", "test_pass") as manager:
 
             # Step 1: Login
-            with patch("aiohttp.ClientSession.post") as mock_post, patch(
-                "aiohttp.ClientSession.get"
-            ) as mock_get_ks:
+            with (
+                patch("aiohttp.ClientSession.post") as mock_post,
+                patch("aiohttp.ClientSession.get") as mock_get_ks,
+            ):
 
                 mock_killswitch = AsyncMock()
                 mock_killswitch.status = 200
@@ -410,9 +413,10 @@ class TestCompleteWorkflow:
                 await manager.get_customer_details()
 
             # Step 3: Get FCR-D revenue data
-            with patch.object(manager, "get_site_id", return_value="test_site"), patch(
-                "aiohttp.ClientSession.get"
-            ) as mock_get:
+            with (
+                patch.object(manager, "get_site_id", return_value="test_site"),
+                patch("aiohttp.ClientSession.get") as mock_get,
+            ):
 
                 mock_response = AsyncMock()
                 mock_response.status = 200
@@ -545,12 +549,16 @@ class TestFCRDStateExtraction:
         self.manager = CheckwattManager("test_user", "test_pass")
 
     def test_fail_activation_with_retry_count_and_complex_power(self):
-        """Test parsing of FAIL ACTIVATION entries with retry count and complex power format."""
-        log_entry = "[ FCR-D FAIL ACTIVATION ] 54x test@example.com --12345-- 85,9/0,6/97,0 % (10,0/10,0 kW) 2025-04-24 00:02:57 API-BACKEND"
-        
+        """Test FAIL ACTIVATION with retry count and complex power."""
+        log_entry = (
+            "[ FCR-D FAIL ACTIVATION ] 54x test@example.com --12345-- "
+            "85,9/0,6/97,0 % (10,0/10,0 kW) "
+            "2025-04-24 00:02:57 API-BACKEND"
+        )
+
         self.manager.logbook_entries = [log_entry]
         self.manager._extract_fcr_d_state()
-        
+
         assert self.manager.fcrd_state == "FAIL ACTIVATION"
         assert self.manager.fcrd_percentage_up == "85,9"
         assert self.manager.fcrd_percentage_response == "0,6"
@@ -560,11 +568,15 @@ class TestFCRDStateExtraction:
 
     def test_activated_with_complex_power_format(self):
         """Test parsing of ACTIVATED entries with complex power format."""
-        log_entry = "[ FCR-D ACTIVATED ] test@example.com --12345-- 96,5/4,0/106,3 % (10,0/10,0 kW) 2025-08-07 00:04:45 API-BACKEND"
-        
+        log_entry = (
+            "[ FCR-D ACTIVATED ] test@example.com --12345-- "
+            "96,5/4,0/106,3 % (10,0/10,0 kW) "
+            "2025-08-07 00:04:45 API-BACKEND"
+        )
+
         self.manager.logbook_entries = [log_entry]
         self.manager._extract_fcr_d_state()
-        
+
         assert self.manager.fcrd_state == "ACTIVATED"
         assert self.manager.fcrd_percentage_up == "96,5"
         assert self.manager.fcrd_percentage_response == "4,0"
@@ -574,11 +586,14 @@ class TestFCRDStateExtraction:
 
     def test_deactivate_with_frequency_up_hz(self):
         """Test parsing of DEACTIVATE entries with UP frequency."""
-        log_entry = "[ FCR-D DEACTIVATE ]  UP 49,83 Hz 0,0 %  (10 kW) - 2025-08-06 17:58:07 API-BACKEND"
-        
+        log_entry = (
+            "[ FCR-D DEACTIVATE ]  UP 49,83 Hz 0,0 %  (10 kW) - "
+            "2025-08-06 17:58:07 API-BACKEND"
+        )
+
         self.manager.logbook_entries = [log_entry]
         self.manager._extract_fcr_d_state()
-        
+
         assert self.manager.fcrd_state == "DEACTIVATE"
         # For DEACTIVATE, the percentage info goes to fcrd_info
         assert self.manager.fcrd_power == "10"
@@ -587,13 +602,16 @@ class TestFCRDStateExtraction:
     def test_multiple_entries_first_match_used(self):
         """Test that only the first matching entry is processed."""
         log_entries = [
-            "[ FCR-D ACTIVATED ] test@example.com --12345-- 97,7/0,5/99,3 % (7 kW) 2024-07-07 00:08:19 API-BACKEND",
-            "[ FCR-D FAIL ACTIVATION ] 54x test@example.com --12345-- 85,9/0,6/97,0 % (10,0/10,0 kW) 2025-04-24 00:02:57 API-BACKEND",
+            "[ FCR-D ACTIVATED ] test@example.com --12345-- "
+            "97,7/0,5/99,3 % (7 kW) 2024-07-07 00:08:19 API-BACKEND",
+            "[ FCR-D FAIL ACTIVATION ] 54x test@example.com --12345-- "
+            "85,9/0,6/97,0 % (10,0/10,0 kW) "
+            "2025-04-24 00:02:57 API-BACKEND",
         ]
-        
+
         self.manager.logbook_entries = log_entries
         self.manager._extract_fcr_d_state()
-        
+
         # Should use the first entry (ACTIVATED)
         assert self.manager.fcrd_state == "ACTIVATED"
         assert self.manager.fcrd_power == "7"

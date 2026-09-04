@@ -241,6 +241,16 @@ For developers who prefer not to install Python locally, a Docker-based developm
 
 Inside the container local code changes are automatically synced and you can run standard Python development commands.
 
+### Development tools
+
+The same lint commands used in CI can be run through Docker Compose:
+
+```bash
+docker compose -f docker-compose.dev.yml run --rm --build pycheckwatt-dev poetry run isort --check-only --diff .
+docker compose -f docker-compose.dev.yml run --rm --build pycheckwatt-dev poetry run black --check --diff .
+docker compose -f docker-compose.dev.yml run --rm --build pycheckwatt-dev poetry run flake8 .
+```
+
 
 
 # Acknowledgements
