@@ -139,6 +139,13 @@ if __name__ == "__main__":
 
 ```
 
+Long-running applications should retain one `CheckwattManager` instance instead of
+creating one for every poll. Repeated calls to `login()` reuse a valid JWT and refresh
+it when necessary. An application-owned `aiohttp.ClientSession` can be passed with
+`session=...`; pyCheckwatt reuses an injected session but does not close it. Set
+`raise_on_rate_limit=True` to receive `CheckwattRateLimitError` with the requested
+retry delay. The default retains the legacy `False` return behavior.
+
 Create a virtual environment and install pyCheckwatt:
 ```bash
 $ python -m venv venv

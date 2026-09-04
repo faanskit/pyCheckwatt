@@ -1,11 +1,16 @@
+import asyncio
+import base64
+import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 import pytest_asyncio
+from aiohttp import ClientResponseError
 
-from pycheckwatt import CheckwattManager
+from pycheckwatt import CheckwattManager, CheckwattRateLimitError
 from tests.fixtures.sample_responses import (
     SAMPLE_CUSTOMER_DETAILS_JSON,
     SAMPLE_EMS_SETTINGS_RESPONSE,
@@ -16,6 +21,14 @@ from tests.fixtures.sample_responses import (
 
 # Add project root to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+def _jwt(expires_at: datetime) -> str:
+    """Create an unsigned token suitable for expiry tests."""
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"exp": expires_at.timestamp()}).encode()
+    ).decode()
+    return f"header.{payload.rstrip('=')}.signature"
 
 
 class TestCheckwattManagerInitialization:
@@ -45,9 +58,37 @@ class TestCheckwattManagerInitialization:
             assert manager.session is not None
             assert hasattr(manager.session, "get")  # Verify it's an aiohttp session
 
+    @pytest.mark.asyncio
+    async def test_injected_session_is_reused_and_not_closed(self):
+        """Test that callers can retain ownership of an injected HTTP session."""
+        session = Mock(closed=False)
+        session.close = AsyncMock()
+        manager = CheckwattManager("test_user", "test_pass", session=session)
+
+        async with manager as entered_manager:
+            assert entered_manager.session is session
+
+        session.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_context_reentry_fails_without_deadlocking(self):
+        """Test that an active manager context cannot be entered again."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            with pytest.raises(RuntimeError, match="context is already active"):
+                async with manager:
+                    pass
+
 
 class TestAuthentication:
     """Test authentication workflow and JWT token management."""
+
+    def test_jwt_with_out_of_range_expiry_is_invalid(self):
+        """Test that an invalid timestamp is treated as an expired JWT."""
+        payload = base64.urlsafe_b64encode(json.dumps({"exp": 10**100}).encode())
+        manager = CheckwattManager("test_user", "test_pass")
+        manager.jwt_token = f"header.{payload.decode().rstrip('=')}.signature"
+
+        assert manager._jwt_is_valid() is False
 
     @pytest.mark.asyncio
     async def test_login_success(self):
@@ -94,6 +135,270 @@ class TestAuthentication:
 
                 assert result is False
                 assert manager.jwt_token is None
+
+    @pytest.mark.asyncio
+    async def test_login_reuses_valid_jwt(self):
+        """Test that repeated login calls do not repeat password authentication."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            manager.jwt_token = _jwt(datetime.now(timezone.utc) + timedelta(hours=1))
+
+            with (
+                patch.object(
+                    manager,
+                    "_continue_kill_switch_not_enabled",
+                    new=AsyncMock(return_value=True),
+                ),
+                patch.object(
+                    manager, "_password_login", new=AsyncMock(return_value=True)
+                ) as password_login,
+            ):
+                assert await manager.login() is True
+                assert await manager.login() is True
+
+            password_login.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_login_refreshes_expired_jwt(self):
+        """Test that an expired JWT uses the refresh token before the password."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            manager.jwt_token = _jwt(datetime.now(timezone.utc) - timedelta(minutes=1))
+            manager.refresh_token = "refresh-token"
+            manager.refresh_token_expires = (
+                datetime.now(timezone.utc) + timedelta(days=1)
+            ).isoformat()
+
+            async def refresh_login():
+                manager.jwt_token = _jwt(
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                )
+                return True
+
+            with (
+                patch.object(
+                    manager,
+                    "_continue_kill_switch_not_enabled",
+                    new=AsyncMock(return_value=True),
+                ),
+                patch.object(
+                    manager, "_refresh_login", new=AsyncMock(side_effect=refresh_login)
+                ) as refresh_login_mock,
+                patch.object(
+                    manager, "_password_login", new=AsyncMock(return_value=True)
+                ) as password_login,
+            ):
+                assert await manager.login() is True
+
+            refresh_login_mock.assert_awaited_once()
+            password_login.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_refresh_login_uses_checkwatt_refresh_contract(self):
+        """Test the refresh endpoint, authorization scheme, and rotated tokens."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            manager.jwt_token = _jwt(datetime.now(timezone.utc) - timedelta(minutes=1))
+            manager.refresh_token = "old-refresh-token"
+            manager.refresh_token_expires = (
+                datetime.now(timezone.utc) + timedelta(days=1)
+            ).isoformat()
+            new_jwt = _jwt(datetime.now(timezone.utc) + timedelta(hours=1))
+
+            with (
+                patch.object(
+                    manager,
+                    "_continue_kill_switch_not_enabled",
+                    new=AsyncMock(return_value=True),
+                ),
+                patch("aiohttp.ClientSession.get") as mock_get,
+                patch("aiohttp.ClientSession.post") as mock_post,
+            ):
+                response = AsyncMock()
+                response.status = 200
+                response.json = AsyncMock(
+                    return_value={
+                        "JwtToken": new_jwt,
+                        "RefreshToken": "new-refresh-token",
+                        "RefreshTokenExpires": (
+                            datetime.now(timezone.utc) + timedelta(days=2)
+                        ).isoformat(),
+                    }
+                )
+                mock_get.return_value.__aenter__.return_value = response
+
+                assert await manager.login() is True
+
+            request = mock_get.call_args
+            assert request.args[0].endswith("/user/RefreshToken?audience=eib")
+            authorization = request.kwargs["headers"]["authorization"]
+            assert authorization == "RefreshToken old-refresh-token"
+            assert manager.jwt_token == new_jwt
+            assert manager.refresh_token == "new-refresh-token"
+            mock_post.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method_name", "request_method"),
+        [
+            ("_continue_kill_switch_not_enabled", "get"),
+            ("_refresh_login", "get"),
+            ("_password_login", "post"),
+        ],
+    )
+    async def test_request_timeout_returns_false(self, method_name, request_method):
+        """Test that asyncio request timeouts are handled on supported Pythons."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            with patch(f"aiohttp.ClientSession.{request_method}") as request:
+                request.return_value.__aenter__.side_effect = asyncio.TimeoutError
+
+                assert await getattr(manager, method_name)() is False
+
+    @pytest.mark.asyncio
+    async def test_concurrent_login_is_single_flight(self):
+        """Test that concurrent callers perform only one password login."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+
+            async def password_login():
+                await asyncio.sleep(0)
+                manager.jwt_token = _jwt(
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                )
+                return True
+
+            with (
+                patch.object(
+                    manager,
+                    "_continue_kill_switch_not_enabled",
+                    new=AsyncMock(return_value=True),
+                ),
+                patch.object(
+                    manager,
+                    "_password_login",
+                    new=AsyncMock(side_effect=password_login),
+                ) as password_login_mock,
+            ):
+                assert await asyncio.gather(manager.login(), manager.login()) == [
+                    True,
+                    True,
+                ]
+
+            password_login_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_is_cached(self):
+        """Test that frequent logins do not repeatedly fetch the kill-switch."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            manager.jwt_token = _jwt(datetime.now(timezone.utc) + timedelta(hours=1))
+
+            with patch("aiohttp.ClientSession.get") as mock_get:
+                response = AsyncMock()
+                response.status = 200
+                response.text = AsyncMock(return_value="0")
+                mock_get.return_value.__aenter__.return_value = response
+
+                assert await manager.login() is True
+                assert await manager.login() is True
+
+            assert mock_get.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_429_uses_and_caches_retry_after(self):
+        """Test that rate limiting defers subsequent kill-switch requests."""
+        async with CheckwattManager(
+            "test_user", "test_pass", raise_on_rate_limit=True
+        ) as manager:
+            with patch("aiohttp.ClientSession.get") as mock_get:
+                response = AsyncMock()
+                response.status = 429
+                response.headers = {"Retry-After": "120"}
+                response.text = AsyncMock(return_value="")
+                mock_get.return_value.__aenter__.return_value = response
+
+                with pytest.raises(CheckwattRateLimitError) as first_error:
+                    await manager.login()
+                with pytest.raises(CheckwattRateLimitError):
+                    await manager.login()
+
+            assert first_error.value.retry_after == timedelta(seconds=120)
+            assert mock_get.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_429_without_retry_after_uses_default(self):
+        """Test that a missing Retry-After header has a safe default."""
+        async with CheckwattManager(
+            "test_user", "test_pass", raise_on_rate_limit=True
+        ) as manager:
+            with patch("aiohttp.ClientSession.get") as mock_get:
+                response = AsyncMock()
+                response.status = 429
+                response.headers = {}
+                response.text = AsyncMock(return_value="")
+                mock_get.return_value.__aenter__.return_value = response
+
+                with pytest.raises(CheckwattRateLimitError) as error:
+                    await manager.login()
+
+            assert error.value.retry_after == timedelta(minutes=15)
+
+    @pytest.mark.asyncio
+    async def test_api_401_invalidates_jwt_for_next_login(self):
+        """Test that rejected API credentials are not reused indefinitely."""
+        manager = CheckwattManager("test_user", "test_pass")
+        manager.jwt_token = _jwt(datetime.now(timezone.utc) + timedelta(hours=1))
+        error = ClientResponseError(
+            request_info=Mock(real_url="https://api.checkwatt.se/test"),
+            history=(),
+            status=401,
+            headers={},
+        )
+
+        assert await manager.handle_client_error("/test", {}, error) is False
+        assert manager.jwt_token is None
+
+    @pytest.mark.asyncio
+    async def test_api_429_raises_rate_limit_error(self):
+        """Test that API rate limits carry the server's retry delay."""
+        manager = CheckwattManager("test_user", "test_pass", raise_on_rate_limit=True)
+        error = ClientResponseError(
+            request_info=Mock(real_url="https://api.checkwatt.se/test"),
+            history=(),
+            status=429,
+            headers={"Retry-After": "30"},
+        )
+
+        with pytest.raises(CheckwattRateLimitError) as rate_limit_error:
+            await manager.handle_client_error("/test", {}, error)
+
+        assert rate_limit_error.value.retry_after == timedelta(seconds=30)
+
+    @pytest.mark.asyncio
+    async def test_api_429_without_retry_after_uses_generic_default(self):
+        """Test that general API rate limits do not use the kill-switch interval."""
+        manager = CheckwattManager("test_user", "test_pass", raise_on_rate_limit=True)
+        error = ClientResponseError(
+            request_info=Mock(real_url="https://api.checkwatt.se/test"),
+            history=(),
+            status=429,
+            headers={},
+        )
+
+        with pytest.raises(CheckwattRateLimitError) as rate_limit_error:
+            await manager.handle_client_error("/test", {}, error)
+
+        assert rate_limit_error.value.retry_after == timedelta(minutes=1)
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_keeps_legacy_false_behavior_by_default(self):
+        """Test backwards-compatible handling when structured errors are disabled."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            with patch("aiohttp.ClientSession.get") as mock_get:
+                response = AsyncMock()
+                response.status = 429
+                response.headers = {"Retry-After": "120"}
+                mock_get.return_value.__aenter__.return_value = response
+
+                assert await manager.login() is False
+                assert await manager.login() is False
+
+            assert mock_get.call_count == 1
 
 
 class TestCustomerDataRetrieval:
