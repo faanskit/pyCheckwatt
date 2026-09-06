@@ -82,6 +82,80 @@ class TestCheckwattManagerInitialization:
 class TestAuthentication:
     """Test authentication workflow and JWT token management."""
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("refresh", [False, True])
+    @pytest.mark.parametrize("raise_on_rate_limit", [False, True])
+    async def test_login_http_429_honors_error_mode(self, refresh, raise_on_rate_limit):
+        """Both authentication endpoints expose throttling without fallback."""
+        async with CheckwattManager(
+            "test_user", "test_pass", raise_on_rate_limit=raise_on_rate_limit
+        ) as manager:
+            if refresh:
+                manager.refresh_token = "refresh-token"
+                manager.refresh_token_expires = (
+                    datetime.now(timezone.utc) + timedelta(days=1)
+                ).isoformat()
+            response = Mock(status=429)
+            response.raise_for_status.side_effect = ClientResponseError(
+                request_info=Mock(real_url="https://api.checkwatt.se/user"),
+                history=(),
+                status=429,
+                headers={"Retry-After": "600"},
+            )
+            with (
+                patch.object(
+                    manager,
+                    "_continue_kill_switch_not_enabled",
+                    new=AsyncMock(return_value=True),
+                ),
+                patch.object(manager.session, "get") as get,
+                patch.object(manager.session, "post") as post,
+            ):
+                get.return_value.__aenter__.return_value = response
+                post.return_value.__aenter__.return_value = response
+                if raise_on_rate_limit:
+                    with pytest.raises(CheckwattRateLimitError) as error:
+                        await manager.login()
+                    assert error.value.retry_after == timedelta(seconds=600)
+                else:
+                    assert await manager.login() is False
+                assert post.call_count == (0 if refresh else 1)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 503, "timeout"])
+    async def test_password_fallback_only_after_refresh_rejection(self, status):
+        """Transient refresh failures must not trigger password authentication."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            manager.refresh_token = "refresh-token"
+            manager.refresh_token_expires = (
+                datetime.now(timezone.utc) + timedelta(days=1)
+            ).isoformat()
+            with (
+                patch.object(
+                    manager,
+                    "_continue_kill_switch_not_enabled",
+                    new=AsyncMock(return_value=True),
+                ),
+                patch.object(manager.session, "get") as get,
+                patch.object(
+                    manager, "_password_login", new=AsyncMock(return_value=True)
+                ) as password_login,
+            ):
+                if status == "timeout":
+                    get.return_value.__aenter__.side_effect = asyncio.TimeoutError
+                else:
+                    response = Mock(status=status)
+                    response.raise_for_status.side_effect = ClientResponseError(
+                        request_info=Mock(real_url="https://api.checkwatt.se/user"),
+                        history=(),
+                        status=status,
+                    )
+                    get.return_value.__aenter__.return_value = response
+                assert await manager.login() is (status == 401)
+                assert password_login.await_count == (1 if status == 401 else 0)
+                if status != 401:
+                    assert manager.refresh_token == "refresh-token"
+
     def test_jwt_with_out_of_range_expiry_is_invalid(self):
         """Test that an invalid timestamp is treated as an expired JWT."""
         payload = base64.urlsafe_b64encode(json.dumps({"exp": 10**100}).encode())
@@ -596,6 +670,59 @@ class TestEnergyDataRetrieval:
 
 class TestFCRDRevenue:
     """Test FCR-D revenue methods and properties."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("month", [3, 9])
+    @pytest.mark.parametrize("period", ["month", "year"])
+    async def test_repeated_revenue_fetch_replaces_totals(self, month, period):
+        """Repeated polls replace totals, including both annual request paths."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            manager.site_id = "test-site"
+            response = Mock(status=200)
+            response.json = AsyncMock()
+            with (
+                patch("pycheckwatt.datetime", wraps=datetime) as clock,
+                patch.object(manager.session, "get") as get,
+            ):
+                clock.now.return_value = datetime(2026, month, 10)
+                get.return_value.__aenter__.return_value = response
+                for value in [100, 100, 150, 0]:
+                    response.json.return_value = {"Revenue": [{"NetRevenue": value}]}
+                    assert (
+                        await getattr(manager, f"get_fcrd_{period}_net_revenue")()
+                        is True
+                    )
+                    expected = value * (2 if period == "year" and month == 9 else 1)
+                    assert getattr(manager, f"fcrd_{period}_net_revenue") == expected
+                    if period == "month":
+                        assert manager.dailyaverage == value / 10
+                        days_left = 21 if month == 3 else 20
+                        assert manager.monthestimate == value / 10 * days_left + value
+
+    @pytest.mark.asyncio
+    async def test_failed_annual_fetch_preserves_previous_snapshot(self):
+        """A failure in the second date range cannot publish a partial total."""
+        async with CheckwattManager("test_user", "test_pass") as manager:
+            manager.site_id = "test-site"
+            manager.revenueyeartotal = 500
+            previous = {"Revenue": [{"NetRevenue": 500}]}
+            manager.revenueyear = previous
+            response = Mock(status=200)
+            response.json = AsyncMock(return_value={"Revenue": [{"NetRevenue": 10}]})
+            failure = ClientResponseError(
+                request_info=Mock(real_url="https://api.checkwatt.se/revenue"),
+                history=(),
+                status=503,
+            )
+            with (
+                patch("pycheckwatt.datetime", wraps=datetime) as clock,
+                patch.object(manager.session, "get") as get,
+            ):
+                clock.now.return_value = datetime(2026, 9, 10)
+                get.return_value.__aenter__.side_effect = [response, failure]
+                assert await manager.get_fcrd_year_net_revenue() is False
+            assert manager.revenueyeartotal == 500
+            assert manager.revenueyear == previous
 
     @pytest.mark.asyncio
     async def test_fcrd_revenue_methods_require_site_id(self):
