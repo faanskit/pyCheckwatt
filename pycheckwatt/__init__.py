@@ -434,6 +434,7 @@ class CheckwattManager:
                     self.refresh_token_expires = None
                     return False
 
+                response.raise_for_status()
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
                 return False
         except (ClientError, asyncio.TimeoutError, TimeoutError) as error:
@@ -472,6 +473,7 @@ class CheckwattManager:
                     )
                     return False
 
+                response.raise_for_status()
                 _LOGGER.error("Unexpected HTTP status code: %s", response.status)
                 return False
         except (ClientError, asyncio.TimeoutError, TimeoutError) as error:
@@ -488,8 +490,13 @@ class CheckwattManager:
         async with self._auth_lock:
             if self._jwt_is_valid():
                 return True
-            if self._refresh_token_is_valid() and await self._refresh_login():
-                return True
+            if self._refresh_token_is_valid():
+                if await self._refresh_login():
+                    return True
+                # Only rejected refresh credentials are cleared. Preserve them
+                # and stop on transient failures, including legacy-mode 429s.
+                if self.refresh_token is not None:
+                    return False
             return await self._password_login()
 
     async def get_customer_details(self):
@@ -623,6 +630,7 @@ class CheckwattManager:
     async def get_fcrd_month_net_revenue(self):
         """Fetch FCR-D revenues from CheckWatt."""
         misseddays = 0
+        month_total = 0
         try:
             site_id = await self.get_site_id()
             from_date = datetime.now().strftime("%Y-%m-01")
@@ -658,18 +666,19 @@ class CheckwattManager:
                 response.raise_for_status()
                 revenue = await response.json()
                 for each in revenue["Revenue"]:
-                    self.revenuemonth += each["NetRevenue"]
+                    month_total += each["NetRevenue"]
                     if each["NetRevenue"] == 0:
                         misseddays += 1
                 dayswithmoney = int(dayssofar) - int(misseddays)
                 if response.status == 200:
                     if dayswithmoney > 0:
-                        self.dailyaverage = self.revenuemonth / int(dayswithmoney)
+                        daily_average = month_total / int(dayswithmoney)
                     else:
-                        self.dailyaverage = 0
-                    self.monthestimate = (
-                        self.dailyaverage * daysleft
-                    ) + self.revenuemonth
+                        daily_average = 0
+                    month_estimate = (daily_average * daysleft) + month_total
+                    self.revenuemonth = month_total
+                    self.dailyaverage = daily_average
+                    self.monthestimate = month_estimate
                     return True
 
                 _LOGGER.error(
@@ -726,6 +735,7 @@ class CheckwattManager:
         months = ["-01-01", "-06-30", "-07-01", yesterday_date]
         loop = 0
         retval = False
+        year_total = 0
         if yesterday_date <= "-07-01":
             try:
                 year_date = datetime.now().strftime("%Y")
@@ -744,10 +754,12 @@ class CheckwattManager:
                     self.base_url + endpoint, headers=headers
                 ) as responseyear:  # noqa: E501
                     responseyear.raise_for_status()
-                    self.revenueyear = await responseyear.json()
-                    for each in self.revenueyear["Revenue"]:
-                        self.revenueyeartotal += each["NetRevenue"]
+                    revenue_year = await responseyear.json()
+                    for each in revenue_year["Revenue"]:
+                        year_total += each["NetRevenue"]
                     if responseyear.status == 200:
+                        self.revenueyear = revenue_year
+                        self.revenueyeartotal = year_total
                         retval = True
                     else:
                         _LOGGER.error(
@@ -779,9 +791,9 @@ class CheckwattManager:
                         self.base_url + endpoint, headers=headers
                     ) as responseyear:  # noqa: E501
                         responseyear.raise_for_status()
-                        self.revenueyear = await responseyear.json()
-                        for each in self.revenueyear["Revenue"]:
-                            self.revenueyeartotal += each["NetRevenue"]
+                        revenue_year = await responseyear.json()
+                        for each in revenue_year["Revenue"]:
+                            year_total += each["NetRevenue"]
                         if responseyear.status == 200:
                             loop += 2
                             retval = True
@@ -791,6 +803,9 @@ class CheckwattManager:
                                 self.base_url + endpoint,
                                 responseyear.status,
                             )
+                            return False
+                self.revenueyear = revenue_year
+                self.revenueyeartotal = year_total
                 return retval
 
             except (ClientResponseError, ClientError) as error:
