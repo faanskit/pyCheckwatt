@@ -250,6 +250,10 @@ Inside the container local code changes are automatically synced and you can run
 
 ### Development tools
 
+The library requires Python 3.10 or newer. CI tests Python 3.10 through 3.14,
+including installation of the built wheel. The development container uses
+Python 3.14; library code retains Python 3.10 syntax compatibility.
+
 The same lint commands used in CI can be run through Docker Compose:
 
 ```bash
