@@ -139,6 +139,13 @@ if __name__ == "__main__":
 
 ```
 
+Long-running applications should retain one `CheckwattManager` instance instead of
+creating one for every poll. Repeated calls to `login()` reuse a valid JWT and refresh
+it when necessary. An application-owned `aiohttp.ClientSession` can be passed with
+`session=...`; pyCheckwatt reuses an injected session but does not close it. Set
+`raise_on_rate_limit=True` to receive `CheckwattRateLimitError` with the requested
+retry delay. The default retains the legacy `False` return behavior.
+
 Create a virtual environment and install pyCheckwatt:
 ```bash
 $ python -m venv venv
@@ -242,6 +249,10 @@ For developers who prefer not to install Python locally, a Docker-based developm
 Inside the container local code changes are automatically synced and you can run standard Python development commands.
 
 ### Development tools
+
+The library requires Python 3.10 or newer. CI tests Python 3.10 through 3.14,
+including installation of the built wheel. The development container uses
+Python 3.14; library code retains Python 3.10 syntax compatibility.
 
 The same lint commands used in CI can be run through Docker Compose:
 
