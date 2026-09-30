@@ -755,21 +755,38 @@ class CheckwattManager:
     async def get_price_zone(self):
         """Fetch Price Zone from CheckWatt."""
 
+        serial = self.rpi_serial
+        if not serial:
+            _LOGGER.error("Cannot fetch price zone without an RPi serial")
+            return False
+
         try:
-            endpoint = "/ems/pricezone"
+            endpoint = f"/site/Statuses?serial={serial}"
             # Define headers with the JwtToken
             headers = {
                 **self._get_headers(),
                 "authorization": f"Bearer {self.jwt_token}",
             }
 
-            # First fetch the revenue
+            # The site status contains the market bidding area (price zone).
             async with self.session.get(
                 self.base_url + endpoint, headers=headers
             ) as response:
                 response.raise_for_status()
                 if response.status == 200:
-                    self.price_zone = await response.text()
+                    statuses = await response.json()
+                    if (
+                        not isinstance(statuses, list)
+                        or not statuses
+                        or not isinstance(statuses[0], dict)
+                    ):
+                        _LOGGER.error("Invalid site status response for price zone")
+                        return False
+                    price_zone = statuses[0].get("Mba")
+                    if not isinstance(price_zone, str) or not price_zone.strip():
+                        _LOGGER.error("Site status contains no valid price zone")
+                        return False
+                    self.price_zone = price_zone.strip()
                     return True
 
                 _LOGGER.error(
@@ -790,7 +807,8 @@ class CheckwattManager:
             end_date = datetime.now() + timedelta(days=1)
             to_date = end_date.strftime("%Y-%m-%d")
             if self.price_zone is None:
-                await self.get_price_zone()
+                if not await self.get_price_zone():
+                    return False
             endpoint = f"/ems/spotprice?zone={self.price_zone}&fromDate={from_date}&toDate={to_date}"  # noqa: E501
             # Define headers with the JwtToken
             headers = {
