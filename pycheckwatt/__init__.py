@@ -1434,14 +1434,16 @@ class CheckwattManager:
         if self.rpi_data is not None:
             meters = self.rpi_data.get("Meters", [])
             for meter in meters:
-                if "RPi" in meter:
-                    return meter["RPi"].upper()
+                if "RPi" in meter and "RpiModel" in meter:
+                    if meter["RpiModel"].find('CM') == 0:
+                        return meter["RPi"].upper()
 
         if self.customer_details is not None:
             meters = self.customer_details.get("Meter", [])
             for meter in meters:
-                if "RpiSerial" in meter:
-                    return meter["RpiSerial"].upper()
+                if "RpiSerial" in meter and "RpiModel" in meter:
+                    if meter["RpiModel"].find('CM') == 0:
+                        return meter["RpiSerial"].upper()
 
         _LOGGER.warning("Unable to find RPi Serial")
         return None
