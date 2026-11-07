@@ -198,7 +198,7 @@ class CheckwattManager:
 
     def _extract_fcr_d_state(self):
         pattern = re.compile(
-            r"\[ FCR-D (ACTIVATED|DEACTIVATE|FAIL ACTIVATION) \] (?:(?:\d+x)?\s?(\S+) --(\d+)-- | (?:(?:UP|DOWN) (?:\d+,\d+) Hz ))((?:(\d+,\d+)\/(\d+,\d+)\/)?(\d+,\d+|[A-Z]+) %)\s+\((\d+,\d+\/\d+,\d+|\d+\/\d+|\d+) kW\)\s*-?\s*.*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"  # noqa: E501
+            r"(?:\[ FCR-D AUTO-ACTIVATED \] \d+(?:[\.,]\d+)?\s*kW\/\d+(?:[\.,]\d+)?\s*kW\s+)?\[ FCR-D (ACTIVATED|DEACTIVATE|FAIL ACTIVATION) \] (?:(?:\d+x)?\s?(\S+) --(\d+)-- | (?:(?:UP|DOWN) (?:\d+[\.,]\d+) Hz ))((?:(\d+[\.,]\d+)\/(\d+[\.,]\d+)\/)?(\d+[\.,]\d+|[A-Z]+) %)\s+\((\d+(?:[\.,]\d+)?(?:\/\d+(?:[\.,]\d+)?)?)\s*kW\)\s*-?\s*.*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
         )
         for entry in self.logbook_entries:
             match = pattern.search(entry)
